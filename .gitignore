@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Env / secrets
+.env
+*.local
+
+# Playwright
+backend/last_screenshot.png
+test-results/
+
+# Android
+android-app/.gradle/
+android-app/local.properties
+android-app/*/build/
+android-app/.idea/
+
+# OS
+Thumbs.db
+.DS_Store
