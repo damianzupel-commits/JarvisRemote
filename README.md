@@ -28,8 +28,8 @@ pueden llegar a él. Además todas las requests requieren un Bearer token (API k
   agente (tool calling), expone `POST /api/chat` autenticado. **Ya scaffoldeado, ver
   `backend/README.md`.**
 - **`tray-app/`** — tray app de Windows (Python + pystray) que arranca/para el backend
-  como subproceso y muestra su estado (corriendo / caído / IP de Tailscale). Placeholder
-  por ahora, ver `tray-app/README.md`.
+  como subproceso y muestra su estado (corriendo / iniciando / caído). **Ya
+  scaffoldeado, ver `tray-app/README.md`.**
 - **`android-app/`** — app nativa Android (Kotlin + Jetpack Compose) que le pega al
   backend vía Tailscale: mandás un mensaje/orden, ves la respuesta y el log de tools
   ejecutadas. Placeholder por ahora, ver `android-app/README.md`.
@@ -63,6 +63,6 @@ python run.py
 ## Roadmap
 
 1. ✅ Backend: conexión a LM Studio + framework de tools (filesystem, browser)
-2. ⬜ Tray app de Windows que administra el backend
+2. ✅ Tray app de Windows que administra el backend
 3. ⬜ App Android que habla con el backend vía Tailscale
 4. ⬜ Más tools (procesos, shell, notificaciones, etc.) una vez que el loop básico esté probado

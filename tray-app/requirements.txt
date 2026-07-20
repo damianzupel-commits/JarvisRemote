@@ -1,0 +1,4 @@
+pystray>=0.19
+pillow>=10.0
+requests>=2.31
+python-dotenv>=1.0

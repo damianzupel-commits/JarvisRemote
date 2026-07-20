@@ -13,6 +13,9 @@ venv/
 backend/last_screenshot.png
 test-results/
 
+# Tray app
+tray-app/backend.log
+
 # Android
 android-app/.gradle/
 android-app/local.properties
