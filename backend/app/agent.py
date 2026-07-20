@@ -8,6 +8,7 @@ import logging
 
 from .config import settings
 from .llm_client import client
+from .phone_link import is_phone_connected
 from .tools import call_tool, openai_tool_schemas
 
 logger = logging.getLogger("jarvis.agent")
@@ -21,8 +22,30 @@ SYSTEM_PROMPT = (
     "inventar la respuesta. Si una tool de celular falla porque no hay ningún celular "
     "conectado, decíselo al usuario en vez de asumir que la acción se hizo. Si una tool "
     "falla, contale al usuario qué pasó en vez de asumir que funcionó. Respondé siempre "
-    "en el mismo idioma en el que te escribe el usuario."
+    "en el mismo idioma en el que te escribe el usuario.\n\n"
+    "Antes de cada mensaje del usuario vas a ver una nota de sistema con el estado ACTUAL "
+    "y recién verificado de la conexión del celular. Ese estado puede cambiar de un mensaje "
+    "a otro (el usuario puede conectar o desconectar el celular en cualquier momento), así "
+    "que confiá siempre en esa nota más reciente por sobre cualquier cosa que hayas dicho "
+    "vos antes en esta misma conversación sobre si hay un celular conectado o no."
 )
+
+
+def _phone_status_note() -> dict:
+    connected = is_phone_connected()
+    return {
+        "role": "system",
+        "content": (
+            "[Estado actual, verificado ahora mismo] Celular conectado: "
+            + ("SÍ" if connected else "NO")
+            + (
+                ". Las tools phone_* deberían funcionar."
+                if connected
+                else ". Las tools phone_* van a fallar hasta que el usuario conecte el celular."
+            )
+        ),
+    }
+
 
 # Historial de conversación en memoria, por conversation_id. Se pierde al reiniciar
 # el proceso (suficiente para v1; si hace falta persistencia se cambia por un store).
@@ -38,9 +61,14 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
     tools = openai_tool_schemas()
 
     for _ in range(settings.max_agent_iterations):
+        # La nota de estado se arma de nuevo en cada vuelta del loop (por si el celular
+        # se conecta/desconecta durante una tarea larga) y no se guarda en `history`:
+        # así siempre es el estado real al momento de la llamada, no una foto vieja que
+        # se vuelve stale (o contradice lo que el modelo dijo antes) a medida que la
+        # conversación crece.
         response = client.chat.completions.create(
             model=settings.lmstudio_model,
-            messages=history,
+            messages=history + [_phone_status_note()],
             tools=tools or None,
             tool_choice="auto" if tools else None,
         )
