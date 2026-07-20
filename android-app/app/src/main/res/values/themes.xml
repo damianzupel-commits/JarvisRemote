@@ -1,0 +1,5 @@
+<resources>
+    <!-- La UI real la maneja Compose (ver ui/theme/Theme.kt); este tema del sistema
+         solo define el fondo/splash antes de que Compose tome control. -->
+    <style name="Theme.JarvisRemote" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

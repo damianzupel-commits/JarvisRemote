@@ -32,7 +32,8 @@ pueden llegar a él. Además todas las requests requieren un Bearer token (API k
   scaffoldeado, ver `tray-app/README.md`.**
 - **`android-app/`** — app nativa Android (Kotlin + Jetpack Compose) que le pega al
   backend vía Tailscale: mandás un mensaje/orden, ves la respuesta y el log de tools
-  ejecutadas. Placeholder por ahora, ver `android-app/README.md`.
+  ejecutadas. **Scaffoldeada pero no compilada en esta máquina** (no hay Android SDK
+  instalado acá) — ver `android-app/README.md` para abrirla en Android Studio.
 
 ## Decisiones técnicas (ya tomadas)
 
@@ -64,5 +65,5 @@ python run.py
 
 1. ✅ Backend: conexión a LM Studio + framework de tools (filesystem, browser)
 2. ✅ Tray app de Windows que administra el backend
-3. ⬜ App Android que habla con el backend vía Tailscale
+3. ✅ App Android (Kotlin + Compose) — scaffoldeada; falta compilarla en una máquina con Android Studio
 4. ⬜ Más tools (procesos, shell, notificaciones, etc.) una vez que el loop básico esté probado
