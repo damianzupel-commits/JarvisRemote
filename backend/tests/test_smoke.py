@@ -9,7 +9,12 @@ client = TestClient(app)
 def test_health():
     resp = client.get("/api/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok", "phone_connected": False}
+    body = resp.json()
+    # network_candidates depende de las interfaces de red de la máquina que
+    # corre el test, así que se valida su forma en vez de un valor fijo.
+    assert body["status"] == "ok"
+    assert body["phone_connected"] is False
+    assert isinstance(body["network_candidates"], list)
 
 
 def test_chat_requires_auth():

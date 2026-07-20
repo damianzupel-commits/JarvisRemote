@@ -34,6 +34,11 @@ Al arrancar:
 Menú del ícono (click derecho / click):
 - **Estado: ...** / **Backend: http://...** — informativos.
 - **Iniciar backend** / **Detener backend**.
+- **Abrir chat** — abre una ventana de chat (Tkinter) para hablarle a Jarvis
+  desde la PC contra el mismo `POST /api/chat` que usa la app Android: mismas
+  tools, incluidas las de `target="phone"` si el celular está conectado por
+  WS (control bidireccional PC↔celular desde un único backend). Usa
+  `API_KEY` de `backend/.env` (mismo `.env` que ya lee `config.py`).
 - **Abrir documentación de la API** — abre `/docs` (Swagger) del backend en el navegador.
 - **Ver logs** — abre `backend.log` con la app asociada a `.log` (normalmente el Bloc de notas).
 - **Salir** — para el backend y cierra la tray.

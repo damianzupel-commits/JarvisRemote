@@ -10,6 +10,7 @@ import requests
 
 import config
 import process_manager
+from chat_window import open_chat_window
 from icon import build_image
 
 _state_lock = threading.Lock()
@@ -98,6 +99,7 @@ def main() -> None:
             pystray.MenuItem("Iniciar backend", _on_start),
             pystray.MenuItem("Detener backend", _on_stop),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem("Abrir chat", open_chat_window),
             pystray.MenuItem("Abrir documentación de la API", _on_open_docs),
             pystray.MenuItem("Ver logs", _on_open_logs),
             pystray.Menu.SEPARATOR,

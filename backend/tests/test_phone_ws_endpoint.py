@@ -32,11 +32,18 @@ def test_ws_phone_rejects_bad_token():
 
 
 def test_ws_phone_connects_and_marks_health_as_connected():
+    # network_candidates depende de las interfaces de red de la máquina que
+    # corre el test, así que se valida status/phone_connected puntualmente
+    # en vez de comparar el dict completo.
     with client.websocket_connect(
         "/ws/phone", headers={"Authorization": f"Bearer {settings.api_key}"}
     ):
         resp = client.get("/api/health")
-        assert resp.json() == {"status": "ok", "phone_connected": True}
+        body = resp.json()
+        assert body["status"] == "ok"
+        assert body["phone_connected"] is True
 
     resp = client.get("/api/health")
-    assert resp.json() == {"status": "ok", "phone_connected": False}
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["phone_connected"] is False
