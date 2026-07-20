@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.jarvisremote.app.MainActivity
 import com.jarvisremote.app.data.SettingsRepository
@@ -46,6 +47,7 @@ class PhoneLinkService : Service() {
     enum class ConnectionStatus { DISCONNECTED, CONNECTING, CONNECTED }
 
     companion object {
+        private const val TAG = "PhoneLinkService"
         private const val CHANNEL_ID = "jarvis_phone_link"
         private const val NOTIFICATION_ID = 1
         private const val MIN_BACKOFF_MS = 2_000L
@@ -132,6 +134,7 @@ class PhoneLinkService : Service() {
                 request,
                 object : WebSocketListener() {
                     override fun onOpen(webSocket: WebSocket, response: Response) {
+                        Log.i(TAG, "WS conectado a $url")
                         didConnect = true
                         _status.value = ConnectionStatus.CONNECTED
                         updateNotification(ConnectionStatus.CONNECTED)
@@ -142,10 +145,12 @@ class PhoneLinkService : Service() {
                     }
 
                     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                        Log.w(TAG, "WS cerrado (code=$code, reason=$reason)")
                         if (cont.isActive) cont.resume(didConnect)
                     }
 
                     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        Log.e(TAG, "WS falló (response=${response?.code} ${response?.message})", t)
                         if (cont.isActive) cont.resume(didConnect)
                     }
                 },
