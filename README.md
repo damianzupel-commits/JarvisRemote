@@ -85,16 +85,22 @@ python run.py
    Accessibility Service (tap/swipe/type/read/global-action), filesystem vía SAF
    (`android-app/.../phone/`). Falta compilar y probar en un dispositivo real.
 6. ⬜ Más tools de PC (procesos, shell, notificaciones, etc.) una vez que el loop básico esté probado
-7. ⬜ Hotspot WiFi local como alternativa a Tailscale cuando el celular y la PC están en la
-   misma habitación (sin depender de router externo ni de internet). Implementación
-   planteada:
-   - PC: crear el hotspot con `netsh wlan set hostednetwork` o la API moderna
+7. 🔶 Hotspot WiFi local como alternativa a Tailscale cuando el celular y la PC están en la
+   misma habitación (sin depender de router externo ni de internet).
+   - ✅ Backend: como ya escucha en `0.0.0.0` (default de `HOST`), acepta conexiones por
+     cualquier interfaz simultáneamente — Tailscale y hotspot/LAN a la vez, sin config
+     extra. `GET /api/health` ahora devuelve `network_candidates`: la lista de IPs propias
+     detectadas (`backend/app/network_info.py`), clasificadas como `hotspot`
+     (`192.168.137.0/24`, subnet default de Windows Mobile Hotspot/ICS), `lan` (resto de
+     RFC1918) o `tailscale` (`100.64.0.0/10`), ordenadas conexión directa primero y
+     Tailscale al final como fallback. Las IPs públicas nunca se listan.
+   - ⬜ PC: crear el hotspot en sí con `netsh wlan set hostednetwork` o la API moderna
      "Mobile Hotspot" de Windows (`Windows.Networking.NetworkOperators` vía WinRT), con
-     SSID/password fijos guardados en la config del backend.
-   - Backend: bindear también en la IP que le asigna la interfaz del hotspot (además de
-     la IP de Tailscale), o escuchar en `0.0.0.0` puerto no expuesto a internet gracias a
-     que el hotspot no tiene salida a internet.
-   - App Android: al conectar, probar primero la URL LAN del hotspot (rápido timeout) y
-     si falla, caer a la URL de Tailscale — mismo Bearer token para ambas, el backend no
-     necesita distinguir el origen.
+     SSID/password fijos.
+   - ⬜ App Android: hoy solo guarda una única `backendUrl` (ver
+     `SettingsRepository.kt`) y no consume `network_candidates` todavía. Falta: guardar la
+     última URL directa (`hotspot`/`lan`) vista en `network_candidates`, y al conectar
+     (REST en `ApiClientProvider`/`ChatRepository`, WS en `PhoneLinkService`) probarla
+     primero con timeout corto antes de caer a la `backendUrl` (Tailscale) guardada —
+     mismo Bearer token para ambas, no hace falta que el backend distinga el origen.
    - No es prioridad inmediata: el foco actual es terminar de compilar el APK.

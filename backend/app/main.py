@@ -8,6 +8,7 @@ from .auth import verify_api_key
 from .config import settings
 from .logging_config import configure_logging
 from .models import ChatRequest, ChatResponse, ToolCallLog
+from .network_info import network_candidates
 from .phone_link import handle_incoming, is_phone_connected, register_phone, unregister_phone
 
 configure_logging()
@@ -18,7 +19,16 @@ app = FastAPI(title="Jarvis Remote Backend", version="0.1.0")
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"status": "ok", "phone_connected": is_phone_connected()}
+    return {
+        "status": "ok",
+        "phone_connected": is_phone_connected(),
+        # Direcciones donde este backend es alcanzable ahora mismo, ordenadas
+        # de conexión directa (hotspot WiFi de la PC / LAN) a Tailscale
+        # (fallback). El celular usa esto para recordar la URL directa y
+        # preferirla la próxima vez, sin dejar de tener Tailscale como red de
+        # respaldo cuando no están en la misma red.
+        "network_candidates": network_candidates(settings.port),
+    }
 
 
 @app.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])

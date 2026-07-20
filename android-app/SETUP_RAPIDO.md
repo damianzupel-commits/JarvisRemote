@@ -3,6 +3,12 @@
 Compilar, instalar y habilitar el control del celular por línea de comandos,
 sin abrir Android Studio en ningún momento.
 
+**Estado (2026-07-20): probado y funciona.** `setup-android-sdk.ps1` corrió
+completo (JDK 17, SDK cmdline-tools, licencias, `local.properties`, wrapper) y
+`gradlew.bat assembleDebug --no-daemon` terminó en `BUILD SUCCESSFUL`,
+generando `app/build/outputs/apk/debug/app-debug.apk` (~17MB). Falta probar
+`deploy.ps1` con el celular conectado por USB (no se hizo en esta sesión).
+
 ## Una sola vez
 
 ```powershell
