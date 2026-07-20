@@ -35,6 +35,14 @@ android {
     buildFeatures {
         compose = true
     }
+
+    composeOptions {
+        // AGP 8.5.2 sin esto usa un default de Compose Compiler (1.3.2) pensado
+        // para Kotlin 1.7.20, incompatible con el Kotlin 1.9.24 que usa este
+        // proyecto. 1.5.14 es la versión de Compose Compiler que corresponde a
+        // Kotlin 1.9.24 según la tabla de compatibilidad de Google.
+        kotlinCompilerExtensionVersion = "1.5.14"
+    }
 }
 
 dependencies {
@@ -49,6 +57,7 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.material.icons.core)
+    implementation(libs.androidx.material.icons.extended)
     debugImplementation(libs.androidx.ui.tooling)
 
     implementation(libs.androidx.navigation.compose)

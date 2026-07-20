@@ -14,25 +14,39 @@ celular sandboxeado a una carpeta elegida vía Storage Access Framework. Ver
 `app/src/main/java/com/jarvisremote/app/phone/` y la sección "Control del
 celular" más abajo.
 
-## Estado: scaffoldeado, no compilado en esta máquina
+## Estado: compila limpio, compilado y verificado desde línea de comandos
 
-Esta máquina no tiene Android SDK, Gradle ni Android Studio instalados (solo un
-JDK 8, insuficiente para el tooling actual de Android), así que **no pude
-compilar ni correr el proyecto acá**. El código está completo y revisado a
-mano, pero la primera compilación real la vas a hacer vos al abrir el proyecto.
+El proyecto se compila y se instala **sin Android Studio**, 100% por línea de
+comandos. Ver `SETUP_RAPIDO.md` para el flujo completo (una sola vez
+`.\setup-android-sdk.ps1`, después `.\deploy.ps1` cada vez que conectás el
+celular). `gradlew.bat assembleDebug` corrió de punta a punta en esta máquina
+(`BUILD SUCCESSFUL`, APK de ~17MB en
+`app/build/outputs/apk/debug/app-debug.apk`).
 
-### Abrir el proyecto
+Esa primera compilación real encontró y corrigió tres bugs que no eran
+visibles solo leyendo el código:
 
-1. Instalar [Android Studio](https://developer.android.com/studio) (trae su
-   propio JDK 17 y te deja instalar el Android SDK desde el wizard inicial si
-   no lo tenés).
-2. `File → Open` → seleccionar la carpeta `android-app/`.
-3. Android Studio va a notar que falta el Gradle wrapper (`gradle-wrapper.jar`
-   no está commiteado — no hay forma de generarlo sin Gradle instalado) y te
-   va a ofrecer crearlo automáticamente. Aceptar. También puede sugerir
-   actualizar versiones de AGP/Gradle/Compose — es esperable, el ecosistema
-   Android se mueve rápido; aceptar las sugeridas por Studio está bien.
-4. Sync de Gradle, y correr en un emulador o un celular conectado por USB con
+- **Compose Compiler / Kotlin desalineados**: AGP 8.5.2 sin
+  `composeOptions.kotlinCompilerExtensionVersion` explícito usaba un default
+  (1.3.2) pensado para Kotlin 1.7.20, incompatible con el Kotlin 1.9.24 del
+  proyecto. Fijado a 1.5.14 en `app/build.gradle.kts` (la versión correcta
+  para 1.9.24 según la tabla de compatibilidad de Google).
+- **`JarvisAccessibilityService.NotEnabledException` no resolvía**: estaba
+  declarada dentro del `companion object`, y una clase anidada ahí adentro
+  solo se accede como `Outer.Companion.Nested` — a diferencia de
+  properties/funciones del companion, que sí se promueven a `Outer.miembro`.
+  Se movió afuera del companion, como nested class directa de la clase.
+- **`Icons.Default.Visibility` / `VisibilityOff` no resolvían**: esos íconos
+  viven en `material-icons-extended`, no en `material-icons-core` (que era la
+  única dependencia declarada). Se agregó `material-icons-extended`.
+
+### Si preferís Android Studio de todas formas
+
+1. Instalar [Android Studio](https://developer.android.com/studio).
+2. `File → Open` → seleccionar la carpeta `android-app/`. El Gradle wrapper ya
+   está commiteado (se generó al correr `setup-android-sdk.ps1`), así que
+   Studio no debería pedir crearlo.
+3. Sync de Gradle, y correr en un emulador o un celular conectado por USB con
    depuración habilitada.
 
 ### Antes de poder usarla de verdad
@@ -153,14 +167,11 @@ android-app/
 
 ## Qué falta / próximos pasos razonables
 
-- Verificar la compilación real en Android Studio (no se pudo hacer en esta
-  sesión, no hay Android SDK acá) y ajustar versiones si Studio sugiere un
-  upgrade de AGP/Gradle/Compose.
-- Probar en un dispositivo real el control del celular: habilitar el
-  Accessibility Service a mano, elegir carpeta SAF, prender el switch de
-  conexión, y pedirle a Jarvis desde el chat que abra una app / lea la
-  pantalla / toque algo — el código está escrito y revisado a mano pero no
-  se pudo ejecutar en esta máquina.
+- Probar en un dispositivo real el control del celular: conectar el celular
+  (ver `SETUP_RAPIDO.md`), elegir carpeta SAF, prender el switch de conexión,
+  y pedirle a Jarvis desde el chat que abra una app / lea la pantalla / toque
+  algo — el código compila limpio pero todavía no se ejecutó contra un
+  celular real ni contra el backend real en esta sesión.
 - Antes de probar contra el backend real: revisar `backend/.env` (HOST
   bindeado a la IP de Tailscale, API_KEY fijo) y que el backend esté corriendo.
 - Mejoras futuras no incluidas en este scaffold inicial: historial persistente

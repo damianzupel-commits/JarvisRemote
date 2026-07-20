@@ -57,6 +57,7 @@ pueden llegar a él. Además todas las requests requieren un Bearer token (API k
 | Tool calling | Formato "tools" de OpenAI (function calling) contra LM Studio | LM Studio expone ese mismo formato; requiere un modelo con soporte de tool calling |
 | Auth | Bearer token estático (API key) por header `Authorization` | Simple, suficiente detrás de Tailscale |
 | Acceso remoto | Tailscale (VPN mesh privada), backend bindeado a la IP de Tailscale | Pedido explícito: evitar exponer nada a internet |
+| Conexión local | Hotspot WiFi de la PC (sin router ni internet) como alternativa a Tailscale cuando están en la misma habitación — ver Roadmap | Evitar depender de Tailscale/internet cuando el celular está al lado de la PC |
 | Tray app | Python + pystray | Mismo lenguaje que el backend, liviano, sin necesidad de Electron/.NET |
 | App Android | Kotlin + Jetpack Compose, Retrofit/OkHttp | Stack nativo estándar actual para Android |
 
@@ -84,3 +85,16 @@ python run.py
    Accessibility Service (tap/swipe/type/read/global-action), filesystem vía SAF
    (`android-app/.../phone/`). Falta compilar y probar en un dispositivo real.
 6. ⬜ Más tools de PC (procesos, shell, notificaciones, etc.) una vez que el loop básico esté probado
+7. ⬜ Hotspot WiFi local como alternativa a Tailscale cuando el celular y la PC están en la
+   misma habitación (sin depender de router externo ni de internet). Implementación
+   planteada:
+   - PC: crear el hotspot con `netsh wlan set hostednetwork` o la API moderna
+     "Mobile Hotspot" de Windows (`Windows.Networking.NetworkOperators` vía WinRT), con
+     SSID/password fijos guardados en la config del backend.
+   - Backend: bindear también en la IP que le asigna la interfaz del hotspot (además de
+     la IP de Tailscale), o escuchar en `0.0.0.0` puerto no expuesto a internet gracias a
+     que el hotspot no tiene salida a internet.
+   - App Android: al conectar, probar primero la URL LAN del hotspot (rápido timeout) y
+     si falla, caer a la URL de Tailscale — mismo Bearer token para ambas, el backend no
+     necesita distinguir el origen.
+   - No es prioridad inmediata: el foco actual es terminar de compilar el APK.

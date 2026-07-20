@@ -26,14 +26,19 @@ import kotlinx.serialization.json.buildJsonObject
  */
 class JarvisAccessibilityService : AccessibilityService() {
 
+    // Nested afuera del companion object a propósito: una clase declarada
+    // adentro de un companion object solo se resuelve como
+    // `Outer.Companion.NotEnabledException`, no como `Outer.NotEnabledException`
+    // (a diferencia de properties/funciones, que sí se promueven). Acá afuera
+    // sí resuelve como espera `PhoneToolHandler`.
+    class NotEnabledException : Exception(
+        "El Accessibility Service de Jarvis no está habilitado en este celular."
+    )
+
     companion object {
         @Volatile
         var instance: JarvisAccessibilityService? = null
             private set
-
-        class NotEnabledException : Exception(
-            "El Accessibility Service de Jarvis no está habilitado en este celular."
-        )
 
         private const val GESTURE_TIMEOUT_MS = 5_000L
         private const val MAX_NODES = 400
