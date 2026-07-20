@@ -3,11 +3,18 @@
 Compilar, instalar y habilitar el control del celular por línea de comandos,
 sin abrir Android Studio en ningún momento.
 
-**Estado (2026-07-20): probado y funciona.** `setup-android-sdk.ps1` corrió
-completo (JDK 17, SDK cmdline-tools, licencias, `local.properties`, wrapper) y
-`gradlew.bat assembleDebug --no-daemon` terminó en `BUILD SUCCESSFUL`,
-generando `app/build/outputs/apk/debug/app-debug.apk` (~17MB). Falta probar
-`deploy.ps1` con el celular conectado por USB (no se hizo en esta sesión).
+**Estado (2026-07-20): probado y funciona por LAN/USB.** `setup-android-sdk.ps1`
+corrió completo (JDK 17, SDK cmdline-tools, licencias, `local.properties`,
+wrapper) y `gradlew.bat assembleDebug --no-daemon` terminó en `BUILD
+SUCCESSFUL`, generando `app/build/outputs/apk/debug/app-debug.apk` (~17MB).
+Probado end-to-end con el celular por WiFi/USB usando la IP LAN de la PC.
+
+**Pendiente: Tailscale.** El caso de uso real es conectarse desde el celular
+con datos móviles (sin WiFi), lo que requiere Tailscale — la IP LAN no sirve
+ahí. A esta fecha Tailscale **no está instalado** en esta PC. Ver "Instalar
+Tailscale (paso manual)" más abajo — son pasos manuales, no se pueden
+automatizar (instalador requiere UAC, login requiere abrir el navegador una
+vez).
 
 ## Una sola vez
 
@@ -73,6 +80,42 @@ app una vez y en **Configuración**:
 De ahí en más, `.\deploy.ps1` es el único comando que necesitás para
 recompilar y reinstalar cada vez que cambies código (el Accessibility Service
 y la config de la app persisten entre reinstalaciones con `adb install -r`).
+
+## Instalar Tailscale (paso manual)
+
+**Estado (2026-07-20): Tailscale NO está instalado en esta PC** (se verificó
+`tailscale version`, el servicio de Windows, `C:\Program Files\Tailscale\` y
+`%LOCALAPPDATA%\Tailscale` — nada de eso existe). Es necesaria la IP de
+Tailscale de la PC para configurar la app Android con datos móviles, así que
+este paso hay que hacerlo antes de usar la app fuera de la red local.
+
+El instalador de Windows es un MSI que pide confirmación UAC de forma
+interactiva — no se puede automatizar por línea de comandos (mismo problema
+que instalar el JDK). Estos dos pasos los tenés que hacer vos a mano:
+
+**En la PC:**
+
+1. Ir a <https://tailscale.com/download/windows> y descargar el instalador.
+2. Correr el instalador descargado y aceptar el popup de UAC ("¿Permitir que
+   esta app haga cambios en el dispositivo?").
+3. Al terminar, Tailscale abre el navegador pidiendo login — loguearte con
+   Google, Microsoft o email. **Anotá qué cuenta usás**, porque el celular
+   tiene que loguearse con la misma para quedar en la misma tailnet.
+4. Avisame cuando quede logueado y corro `tailscale ip -4` para conseguir la
+   IP (`100.x.x.x`) y actualizar la URL del backend en esta guía y en la app.
+
+**En el celular:**
+
+1. Instalar la app **Tailscale** desde Play Store.
+2. Abrirla y loguearse con **la misma cuenta** que usaste en la PC (paso 3 de
+   arriba) — así ambos dispositivos quedan en la misma tailnet y se pueden
+   ver entre sí.
+3. Dejar el switch de Tailscale prendido (puede pedir permiso de VPN/"agregar
+   configuración de VPN" — es esperable, Tailscale funciona como una VPN
+   local).
+4. En la app Jarvis Remote, en Configuración, usar `http://<ip_tailscale_pc>:8000`
+   como URL del backend (en vez de la IP LAN `192.168.x.x` que se usó para las
+   pruebas por WiFi) y volver a tocar "Probar conexión".
 
 ## Si algo falla
 
