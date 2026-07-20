@@ -66,7 +66,7 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
         # así siempre es el estado real al momento de la llamada, no una foto vieja que
         # se vuelve stale (o contradice lo que el modelo dijo antes) a medida que la
         # conversación crece.
-        response = client.chat.completions.create(
+        response = await client.chat.completions.create(
             model=settings.lmstudio_model,
             messages=history + [_phone_status_note()],
             tools=tools or None,
