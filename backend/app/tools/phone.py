@@ -28,7 +28,12 @@ def _not_routed(name: str):
 
 @register_tool(
     name="phone_open_app",
-    description="Abre una app instalada en el celular a partir de su package name (ej. 'com.whatsapp').",
+    description=(
+        "Abre una app instalada en el CELULAR del usuario (Android), a partir de su package name "
+        "(ej. 'com.whatsapp'). Usar esta tool cuando el usuario pida abrir una app en su teléfono/celular, "
+        "aunque no lo diga explícitamente pero quede claro por contexto (ej. WhatsApp, la calculadora, la "
+        "cámara). No usar para abrir programas o sitios web en la PC — para eso están las tools browser_*."
+    ),
     parameters={
         "type": "object",
         "properties": {

@@ -31,7 +31,11 @@ async def _ensure_page() -> Page:
 
 @register_tool(
     name="browser_open",
-    description="Abre una URL en el navegador automatizado (crea el navegador si no está corriendo).",
+    description=(
+        "Abre una URL en un navegador Chromium automatizado que corre en la PC del usuario (crea el "
+        "navegador si no está corriendo). Es para navegar la web desde la PC, no para abrir apps del "
+        "celular (para eso usar phone_open_app) ni para abrir programas de escritorio de la PC."
+    ),
     parameters={
         "type": "object",
         "properties": {"url": {"type": "string", "description": "URL completa a abrir."}},

@@ -22,7 +22,7 @@ def _resolve(path: str) -> Path:
 
 @register_tool(
     name="fs_list_dir",
-    description="Lista archivos y subcarpetas de un directorio.",
+    description="Lista archivos y subcarpetas de un directorio en la PC del usuario.",
     parameters={
         "type": "object",
         "properties": {
@@ -54,7 +54,7 @@ def fs_list_dir(path: str = ".") -> dict:
 
 @register_tool(
     name="fs_read_file",
-    description="Lee el contenido de texto de un archivo.",
+    description="Lee el contenido de texto de un archivo en la PC del usuario.",
     parameters={
         "type": "object",
         "properties": {
@@ -82,7 +82,10 @@ def fs_read_file(path: str, max_chars: int = 20000) -> dict:
 
 @register_tool(
     name="fs_write_file",
-    description="Crea o sobreescribe un archivo con el contenido dado (crea carpetas intermedias si hace falta).",
+    description=(
+        "Crea o sobreescribe un archivo en la PC del usuario con el contenido dado "
+        "(crea carpetas intermedias si hace falta)."
+    ),
     parameters={
         "type": "object",
         "properties": {
@@ -107,7 +110,7 @@ def fs_write_file(path: str, content: str, append: bool = False) -> dict:
 
 @register_tool(
     name="fs_create_dir",
-    description="Crea una carpeta (y las intermedias que hagan falta).",
+    description="Crea una carpeta en la PC del usuario (y las intermedias que hagan falta).",
     parameters={
         "type": "object",
         "properties": {"path": {"type": "string", "description": "Ruta relativa a la raíz permitida."}},
@@ -122,7 +125,7 @@ def fs_create_dir(path: str) -> dict:
 
 @register_tool(
     name="fs_move_path",
-    description="Mueve o renombra un archivo o carpeta dentro de la raíz permitida.",
+    description="Mueve o renombra un archivo o carpeta en la PC del usuario, dentro de la raíz permitida.",
     parameters={
         "type": "object",
         "properties": {
@@ -145,7 +148,7 @@ def fs_move_path(source: str, destination: str) -> dict:
 @register_tool(
     name="fs_delete_path",
     description=(
-        "Borra un archivo o carpeta (recursivamente). Deshabilitado por default: "
+        "Borra un archivo o carpeta en la PC del usuario (recursivamente). Deshabilitado por default: "
         "requiere FS_ALLOW_DELETE=true en el .env del backend."
     ),
     parameters={
