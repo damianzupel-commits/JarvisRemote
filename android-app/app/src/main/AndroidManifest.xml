@@ -2,6 +2,23 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!--
+    Necesario para que PackageManager.getLaunchIntentForPackage funcione con
+    cualquier app instalada (phone_open_app): a partir de Android 11, un paquete
+    solo es "visible" para otro si hay una declaración <queries> que lo cubra.
+    Esto declara visibilidad sobre cualquier app con ícono de launcher.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -26,5 +43,41 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+        Control genérico de pantalla (tap/swipe/type/read/global-action) sobre
+        cualquier app visible. El usuario tiene que habilitarlo a mano en Ajustes
+        → Accesibilidad; no se puede activar programáticamente. Ver
+        `phone/JarvisAccessibilityService.kt` y `res/xml/accessibility_service_config.xml`.
+        -->
+        <service
+            android:name=".phone.JarvisAccessibilityService"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!--
+        Foreground service que mantiene la conexión WebSocket saliente con el
+        backend (`/ws/phone`). Tipo "dataSync": sincroniza tool calls/resultados
+        con un servidor remoto mientras la app no está en primer plano.
+        -->
+        <service
+            android:name=".phone.PhoneLinkService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <receiver
+            android:name=".phone.BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

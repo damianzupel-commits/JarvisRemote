@@ -30,6 +30,8 @@ class Settings:
 
     max_agent_iterations: int = int(os.getenv("MAX_AGENT_ITERATIONS", "10"))
 
+    phone_tool_timeout: float = float(os.getenv("PHONE_TOOL_TIMEOUT", "30"))
+
 
 settings = Settings()
 

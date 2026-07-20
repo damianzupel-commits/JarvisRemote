@@ -9,7 +9,7 @@ client = TestClient(app)
 def test_health():
     resp = client.get("/api/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    assert resp.json() == {"status": "ok", "phone_connected": False}
 
 
 def test_chat_requires_auth():

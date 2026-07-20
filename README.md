@@ -8,15 +8,28 @@ cualquier lugar, con capacidad de ejecutar acciones reales en tu PC
 
 ```
 Celular (Android) ──Tailscale VPN──▶ PC Windows
-                                       │
-                                       ├─ backend (FastAPI, Python)
-                                       │    ├─ habla con LM Studio (localhost:1234, OpenAI-compatible)
-                                       │    └─ expone tools que el LLM puede invocar
-                                       │         (filesystem, browser automation, ...)
+    │                                  │
+    │ WebSocket saliente               ├─ backend (FastAPI, Python)
+    │ (/ws/phone, foreground service)  │    ├─ habla con LM Studio (localhost:1234, OpenAI-compatible)
+    └──────────────────────────────────▶    └─ expone tools que el LLM puede invocar, ruteadas por
+                                       │         `target: pc|phone` (filesystem, browser en PC;
+                                       │         filesystem SAF + Accessibility Service en el celular)
                                        │
                                        └─ tray-app (Python + pystray)
                                             corre/administra el backend y muestra estado
 ```
+
+Además de `POST /api/chat` (celular → backend), el backend expone `/ws/phone`: una
+conexión WebSocket **saliente desde el celular** (mantenida por un foreground service
+en la app Android), autenticada con el mismo Bearer token. Mientras esté conectado, el
+LLM puede invocar tools con `target="phone"` (`phone_open_app`, `phone_list_dir`,
+`phone_read_file`, `phone_write_file`, `phone_tap`, `phone_swipe`, `phone_type_text`,
+`phone_read_screen`, `phone_global_action`) que se despachan al celular y esperan la
+respuesta correlacionada por id (ver `backend/app/phone_link.py` y
+`backend/app/tools/phone.py`). El control de pantalla usa el Accessibility Service de
+Android (control total, riesgo asumido explícitamente); el filesystem del celular está
+sandboxeado a una carpeta elegida una vez vía Storage Access Framework (mismo modelo
+que `FS_ALLOWED_ROOT` para la PC).
 
 No hay ningún puerto expuesto a internet. El backend escucha en la IP privada que te da
 Tailscale (`100.x.x.x`), y solo dispositivos dentro de tu tailnet (tu PC y tu celular)
@@ -66,4 +79,8 @@ python run.py
 1. ✅ Backend: conexión a LM Studio + framework de tools (filesystem, browser)
 2. ✅ Tray app de Windows que administra el backend
 3. ✅ App Android (Kotlin + Compose) — scaffoldeada; falta compilarla en una máquina con Android Studio
-4. ⬜ Más tools (procesos, shell, notificaciones, etc.) una vez que el loop básico esté probado
+4. ✅ Backend: `/ws/phone` + tools `target="phone"` (routing por campo `target`, ver `backend/app/phone_link.py`)
+5. ✅ App Android: control total del celular — foreground service con WebSocket saliente,
+   Accessibility Service (tap/swipe/type/read/global-action), filesystem vía SAF
+   (`android-app/.../phone/`). Falta compilar y probar en un dispositivo real.
+6. ⬜ Más tools de PC (procesos, shell, notificaciones, etc.) una vez que el loop básico esté probado

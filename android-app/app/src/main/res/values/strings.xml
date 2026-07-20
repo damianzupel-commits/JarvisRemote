@@ -1,3 +1,8 @@
 <resources>
     <string name="app_name">Jarvis Remote</string>
+    <string name="accessibility_service_description">
+        Le permite a Jarvis leer y controlar la pantalla del celular (tocar, deslizar,
+        escribir texto, leer contenido) cuando se lo pedís desde el chat. Jarvis corre
+        localmente en tu PC y solo actúa cuando vos le mandás una instrucción.
+    </string>
 </resources>

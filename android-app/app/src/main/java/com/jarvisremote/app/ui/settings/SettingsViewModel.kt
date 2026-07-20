@@ -7,6 +7,7 @@ import com.jarvisremote.app.data.ApiClientProvider
 import com.jarvisremote.app.data.JarvisSettings
 import com.jarvisremote.app.data.SettingsRepository
 import com.jarvisremote.app.data.describeError
+import com.jarvisremote.app.phone.PhoneLinkService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +27,20 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     val settings: StateFlow<JarvisSettings> = settingsRepository.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), JarvisSettings("", ""))
+
+    val phoneLinkStatus: StateFlow<PhoneLinkService.ConnectionStatus> = PhoneLinkService.status
+
+    fun savePhoneFolderUri(uri: String) {
+        viewModelScope.launch { settingsRepository.savePhoneFolderUri(uri) }
+    }
+
+    fun setPhoneLinkEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setPhoneLinkEnabled(enabled)
+            val app = getApplication<Application>()
+            if (enabled) PhoneLinkService.start(app) else PhoneLinkService.stop(app)
+        }
+    }
 
     private val _testState = MutableStateFlow<ConnectionTestState>(ConnectionTestState.Idle)
     val testState: StateFlow<ConnectionTestState> = _testState.asStateFlow()
