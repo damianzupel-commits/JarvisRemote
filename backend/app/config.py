@@ -36,6 +36,15 @@ class Settings:
 
     max_agent_iterations: int = int(os.getenv("MAX_AGENT_ITERATIONS", "10"))
 
+    # Tope de mensajes que se guardan por conversación en memoria (ver
+    # app/agent.py::_trim_history). Sin esto, `_conversations` crece para
+    # siempre mientras el proceso esté vivo y termina superando el contexto
+    # del modelo (pasó de verdad: "Context size has been exceeded" de LM
+    # Studio, todo /api/chat empezó a tirar 500). El corte es simple —por
+    # cantidad de mensajes, no por tokens reales— y siempre cae en el próximo
+    # mensaje 'user' para no partir un tool_call de su respuesta.
+    max_history_messages: int = int(os.getenv("MAX_HISTORY_MESSAGES", "40"))
+
     phone_tool_timeout: float = float(os.getenv("PHONE_TOOL_TIMEOUT", "30"))
 
     # Ejecución de comandos de shell reales en el celular vía Termux

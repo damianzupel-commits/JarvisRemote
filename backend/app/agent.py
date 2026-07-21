@@ -76,15 +76,35 @@ def _phone_status_note() -> dict:
 _conversations: dict[str, list[dict]] = {}
 
 
+def _trim_history(history: list[dict], max_messages: int) -> None:
+    """Recorta `history` in-place si el cuerpo (todo menos el system prompt en
+    [0]) supera `max_messages`. Corta siempre en el próximo mensaje 'role':'user'
+    para no dejar un tool_call sin su respuesta (o viceversa), lo cual rompe el
+    pedido al modelo. Corte simple por cantidad de mensajes, no por tokens reales."""
+    body = history[1:]
+    excess = len(body) - max_messages
+    if excess <= 0:
+        return
+    cut = excess
+    while cut < len(body) and body[cut].get("role") != "user":
+        cut += 1
+    history[1:] = body[cut:]
+
+
 async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str, list[dict]]:
     conv_id = conversation_id or "default"
     history = _conversations.setdefault(conv_id, [{"role": "system", "content": SYSTEM_PROMPT}])
     history.append({"role": "user", "content": message})
+    _trim_history(history, settings.max_history_messages)
 
     tool_log: list[dict] = []
     tools = openai_tool_schemas()
 
     for _ in range(settings.max_agent_iterations):
+        # Poda también acá adentro (no solo al entrar): un turno con muchas
+        # tool calls puede hacer crecer `history` varias veces dentro del
+        # mismo `run_agent`, antes de volver a pasar por la poda de arriba.
+        _trim_history(history, settings.max_history_messages)
         # La nota de estado se arma de nuevo en cada vuelta del loop (por si el celular
         # se conecta/desconecta durante una tarea larga) y no se guarda en `history`:
         # así siempre es el estado real al momento de la llamada, no una foto vieja que
