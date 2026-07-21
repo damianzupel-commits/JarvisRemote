@@ -121,7 +121,8 @@ android-app/
           NetworkModels.kt              # ChatRequest/ChatResponse/ToolCallLog/HealthResponse (kotlinx.serialization)
           BackendApi.kt                 # interfaz Retrofit (GET /api/health, POST /api/chat)
           ApiClientProvider.kt          # arma/cachea Retrofit+OkHttp con la URL/API key actuales
-          SettingsRepository.kt         # DataStore: backend URL, API key, conversation_id
+          SettingsRepository.kt         # DataStore: backend URL, API key (cifrado), conversation_id
+          ApiKeyCrypto.kt               # cifra/descifra el API key con una clave AES-256-GCM en Android Keystore
           ChatRepository.kt             # arma el request y llama a la API
           NetworkError.kt               # mensajes de error legibles (401, timeout, sin red, ...)
         phone/
@@ -199,6 +200,16 @@ android-app/
 
 ## Qué falta / próximos pasos razonables
 
+- **Cifrado del API key (`ApiKeyCrypto.kt` + `SettingsRepository.kt`) — pendiente
+  de validar en un dispositivo real.** Compila limpio (`gradlew.bat assembleDebug`
+  → BUILD SUCCESSFUL) y no rompió los tests JVM existentes, pero
+  `android.security.keystore.*` solo existe en el framework real de Android — no
+  hay forma de instanciar el Android Keystore en un JVM test puro (Robolectric
+  tampoco lo simula bien), así que no tiene test unitario, y el flujo real
+  (generar la clave, cifrar al guardar, descifrar al leer, y sobre todo la
+  migración: un API key viejo guardado en texto plano ANTES de este cambio tiene
+  que seguir funcionando sin que el usuario tenga que volver a tipearlo) recién
+  se puede confirmar instalando el APK actualizado en el celular de Damian.
 - Probar en un dispositivo real el control del celular: conectar el celular
   (ver `SETUP_RAPIDO.md`), elegir carpeta SAF, prender el switch de conexión,
   y pedirle a Jarvis desde el chat que abra una app / lea la pantalla / toque

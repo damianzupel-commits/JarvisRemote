@@ -27,6 +27,13 @@ data class JarvisSettings(
     val lastKnownDirectUrl: String = "",
 )
 
+/**
+ * El API key se guarda cifrado (Android Keystore vía [ApiKeyCrypto]), no en texto
+ * plano — ver el docstring de esa clase para el detalle y qué falta validar en un
+ * dispositivo real. El resto de los campos no tiene datos sensibles que ameriten
+ * el mismo tratamiento (la URL del backend y el candidato directo cacheado son
+ * direcciones IP de la propia red del usuario, no credenciales).
+ */
 class SettingsRepository(private val context: Context) {
     private object Keys {
         val BACKEND_URL = stringPreferencesKey("backend_url")
@@ -40,7 +47,11 @@ class SettingsRepository(private val context: Context) {
     val settingsFlow: Flow<JarvisSettings> = context.dataStore.data.map { prefs ->
         JarvisSettings(
             backendUrl = prefs[Keys.BACKEND_URL] ?: "",
-            apiKey = prefs[Keys.API_KEY] ?: "",
+            // El valor guardado en DataStore es el cifrado (ver ApiKeyCrypto) — se
+            // descifra acá al leer, así que para el resto de la app (ViewModels,
+            // ChatRepository, PhoneLinkService, SettingsScreen) `apiKey` sigue siendo
+            // el string en texto plano de siempre, sin tocar ningún call site.
+            apiKey = ApiKeyCrypto.decrypt(prefs[Keys.API_KEY] ?: ""),
             phoneFolderUri = prefs[Keys.PHONE_FOLDER_URI] ?: "",
             phoneLinkEnabled = prefs[Keys.PHONE_LINK_ENABLED] ?: false,
             lastKnownDirectUrl = prefs[Keys.LAST_KNOWN_DIRECT_URL] ?: "",
@@ -50,7 +61,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun saveBackendConfig(url: String, apiKey: String) {
         context.dataStore.edit { prefs ->
             prefs[Keys.BACKEND_URL] = url.trim().trimEnd('/')
-            prefs[Keys.API_KEY] = apiKey.trim()
+            prefs[Keys.API_KEY] = ApiKeyCrypto.encrypt(apiKey.trim())
         }
     }
 
