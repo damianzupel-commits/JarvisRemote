@@ -94,8 +94,11 @@ pytest
   `read_file`/`write_file`, `phone_tap`/`swipe`/`type_text`/`read_screen`/
   `global_action` (Accessibility Service), y `phone_run_command` — shell real
   en el celular vía Termux, el nivel más invasivo posible (código arbitrario,
-  no solo UI). Gateada por `PHONE_SHELL_ENABLED` y logueada como auditoría en
-  `phone_link.dispatch_to_phone`. Ver sección de seguridad más abajo.
+  no solo UI). Gateada por `PHONE_SHELL_ENABLED`. Ver sección de seguridad más abajo.
+- `app/audit_log.py` — log de auditoría estructurado (JSON por línea, rotado
+  por tamaño en `backend/audit.log`, gitignored) de cada tool call de celular
+  y de escritorio, aparte del logging general de texto libre. Ver sección de
+  seguridad.
 - `app/main.py` — endpoints `GET /api/health` y `POST /api/chat`.
 
 ## Agregar una tool nueva
@@ -111,6 +114,15 @@ las tool calls automáticamente contra el registry.
 
 - El backend no valida quién está del otro lado más allá del Bearer token: la
   barrera principal es que solo es alcanzable a través de tu tailnet.
+- **Log de auditoría persistente y estructurado** (`app/audit_log.py`): cada
+  tool call de celular (`phone_link.dispatch_to_phone`, todas las `phone_*`,
+  no solo `phone_run_command`) y de escritorio (`tools/desktop._audited`)
+  queda registrada como una línea JSON en `backend/audit.log` (gitignored),
+  con timestamp UTC, tool, argumentos, y resultado o error — rota a los 5MB
+  x 5 archivos. Es aparte del logging general de texto libre
+  (`logging_config.py`, que solo persiste si corrés vía `tray-app` — ver
+  `tray-app/README.md`); este log de auditoría persiste siempre,
+  independientemente de cómo arranques el backend.
 - `fs_delete_path` está apagada por default (`FS_ALLOW_DELETE=false`).
 - Las tools de filesystem no pueden salir de `FS_ALLOWED_ROOT`.
 - El modelo necesita soportar tool/function calling en el formato de LM Studio

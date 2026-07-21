@@ -1,0 +1,72 @@
+"""Logger de auditoría estructurado (JSON por línea, con rotación por tamaño),
+separado del logging general de la app (`logging_config.py`).
+
+El logging general (via `logger.info`/`logger.warning` en `phone_link.py` y
+`tools/desktop.py`) es texto libre pensado para diagnosticar en vivo mientras
+se mira la consola/tray — mezcla todos los subsistemas y niveles, y no
+persiste salvo que se corra vía la tray-app (ver `tray-app/process_manager.py`).
+
+Este módulo es aparte, pensado específicamente para poder responder después
+"qué hizo Jarvis mientras no miraba": cada tool call de `target=phone`
+(`phone_link.dispatch_to_phone`) y de escritorio (`tools/desktop._audited`)
+queda acá, una línea JSON por evento, con timestamp UTC, el tool, sus
+argumentos, y el resultado o el error — fácil de grepear/parsear con `jq` o
+similar, a diferencia del log de texto libre.
+
+Rota por tamaño (5 MB x 5 archivos = 25 MB tope) para no crecer sin límite.
+"""
+
+import json
+import logging
+import logging.handlers
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+_AUDIT_LOG_PATH = Path(__file__).resolve().parent.parent / "audit.log"
+_MAX_BYTES = 5 * 1024 * 1024
+_BACKUP_COUNT = 5
+
+_audit_logger = logging.getLogger("jarvis.audit")
+_audit_logger.setLevel(logging.INFO)
+_audit_logger.propagate = False  # no duplicar estas líneas en el log general/consola
+
+if not _audit_logger.handlers:
+    _handler = logging.handlers.RotatingFileHandler(
+        _AUDIT_LOG_PATH, maxBytes=_MAX_BYTES, backupCount=_BACKUP_COUNT, encoding="utf-8"
+    )
+    _handler.setFormatter(logging.Formatter("%(message)s"))
+    _audit_logger.addHandler(_handler)
+
+
+def log_tool_call(
+    *,
+    target: str,
+    tool: str,
+    arguments: dict[str, Any],
+    result: Any = None,
+    error: str | None = None,
+) -> None:
+    """Registra un tool call de `target` ("phone" o "desktop") como una línea JSON.
+
+    Nunca lanza: un fallo de auditoría (ej. algo no serializable) no debe romper
+    la tool call real — en el peor caso se pierde esa línea de auditoría, se
+    loguea el fallo en el logger general, y se sigue.
+    """
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "target": target,
+        "tool": tool,
+        "arguments": arguments,
+        "ok": error is None,
+    }
+    if error is not None:
+        entry["error"] = error
+    else:
+        entry["result"] = result
+    try:
+        _audit_logger.info(json.dumps(entry, ensure_ascii=False, default=str))
+    except Exception:
+        logging.getLogger("jarvis.audit_log_internal").warning(
+            "No se pudo escribir la línea de auditoría para tool=%s", tool, exc_info=True
+        )

@@ -17,6 +17,7 @@ import re
 import uuid
 from typing import Any, Protocol
 
+from . import audit_log
 from .config import settings
 
 logger = logging.getLogger("jarvis.phone_link")
@@ -121,18 +122,23 @@ async def handle_incoming(message: dict) -> None:
 async def dispatch_to_phone(tool_name: str, arguments: dict[str, Any], timeout: float | None = None) -> Any:
     if tool_name in _SHELL_TOOL_NAMES:
         if not settings.phone_shell_enabled:
-            raise PermissionError(
-                "Ejecución de comandos en el celular deshabilitada. Setear "
-                "PHONE_SHELL_ENABLED=true en backend/.env para habilitarla."
-            )
+            error = "Ejecución de comandos en el celular deshabilitada. Setear PHONE_SHELL_ENABLED=true en backend/.env para habilitarla."
+            audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=error)
+            raise PermissionError(error)
         command = arguments.get("command")
         if isinstance(command, str):
-            _check_command_blocklist(command)
+            try:
+                _check_command_blocklist(command)
+            except DestructiveCommandBlockedError as exc:
+                audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=str(exc))
+                raise
         logger.info("phone_shell: tool=%s arguments=%s", tool_name, arguments)
 
     timeout = timeout if timeout is not None else settings.phone_tool_timeout
     if _phone_ws is None:
-        raise PhoneNotConnectedError("No hay ningún celular conectado a Jarvis en este momento")
+        error = "No hay ningún celular conectado a Jarvis en este momento"
+        audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=error)
+        raise PhoneNotConnectedError(error)
 
     call_id = str(uuid.uuid4())
     fut: asyncio.Future = asyncio.get_event_loop().create_future()
@@ -143,10 +149,20 @@ async def dispatch_to_phone(tool_name: str, arguments: dict[str, Any], timeout: 
         await _phone_ws.send_text(json.dumps(payload, ensure_ascii=False))
     except Exception as exc:
         _pending.pop(call_id, None)
-        raise PhoneNotConnectedError(f"No se pudo mandar el tool call al celular: {exc}") from exc
+        error = f"No se pudo mandar el tool call al celular: {exc}"
+        audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=error)
+        raise PhoneNotConnectedError(error) from exc
 
     try:
-        return await asyncio.wait_for(fut, timeout=timeout)
+        result = await asyncio.wait_for(fut, timeout=timeout)
     except asyncio.TimeoutError as exc:
         _pending.pop(call_id, None)
-        raise TimeoutError(f"El celular no respondió el tool call '{tool_name}' a tiempo") from exc
+        error = f"El celular no respondió el tool call '{tool_name}' a tiempo"
+        audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=error)
+        raise TimeoutError(error) from exc
+    except Exception as exc:
+        audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=str(exc))
+        raise
+    else:
+        audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, result=result)
+        return result

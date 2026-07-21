@@ -16,6 +16,9 @@ test-results/
 # Tray app
 tray-app/backend.log
 
+# Log de auditoría estructurado (backend/app/audit_log.py), rota por tamaño
+backend/audit.log*
+
 # Android
 android-app/.gradle/
 android-app/local.properties

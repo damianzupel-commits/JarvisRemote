@@ -15,8 +15,10 @@ Equivalentes en el celular a las tools de PC (filesystem, browser/pantalla):
   visible en pantalla (incluidas apps de banca, 2FA, WhatsApp, etc.).
 - `phone_run_command`: ejecución de shell REAL en el celular vía Termux (Intent
   RUN_COMMAND) — código arbitrario, no solo interacción con la UI. El nivel más
-  invasivo posible del lado del celular; gateado por `PHONE_SHELL_ENABLED` y
-  logueado como auditoría en `phone_link.dispatch_to_phone`. Requiere pasos
+  invasivo posible del lado del celular; gateado por `PHONE_SHELL_ENABLED`.
+  Todas las tools de celular (no solo esta) quedan registradas en el log de
+  auditoría estructurado (`app/audit_log.py`, JSON por línea en
+  `backend/audit.log`) desde `phone_link.dispatch_to_phone`. Requiere pasos
   manuales del usuario (Termux instalado desde F-Droid, allow-external-apps,
   permiso Android otorgado) — ver docstring de la tool y el README. Tiene un
   blocklist de patrones obviamente destructivos (`phone_link._check_command_blocklist`)

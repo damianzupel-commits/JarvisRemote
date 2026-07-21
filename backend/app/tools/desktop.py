@@ -13,7 +13,9 @@ PC, igual que ya lo había aceptado para el celular. Se puede apagar entero con
 `DESKTOP_CONTROL_ENABLED=false` en `backend/.env` (ver `config.py`).
 
 Cada acción se loguea (función, argumentos, timestamp) vía el logger
-`jarvis.desktop`, como rastro de auditoría dado el nivel de riesgo.
+`jarvis.desktop` (texto libre, para diagnosticar en vivo) Y vía `audit_log`
+(JSON estructurado, rotado por tamaño, en `backend/audit.log`) — ver
+`app/audit_log.py` para el detalle de auditoría persistente.
 
 Limitación real de Windows (no un bug de este módulo): ventanas elevadas (UAC,
 "Ejecutar como administrador", instaladores, Task Manager elevado) no se
@@ -41,6 +43,7 @@ from typing import Optional
 import pyautogui
 from pywinauto import Desktop
 
+from .. import audit_log
 from ..config import settings
 from . import register_tool
 
@@ -123,13 +126,22 @@ def _audited(fn):
         _check_enabled()
         logger.info("desktop_action name=%s args=%s kwargs=%s", fn.__name__, args, kwargs)
         try:
-            return fn(*args, **kwargs)
-        except (DesktopControlDisabled, ElevatedWindowError):
+            result = fn(*args, **kwargs)
+        except (DesktopControlDisabled, ElevatedWindowError) as exc:
+            audit_log.log_tool_call(target="desktop", tool=fn.__name__, arguments=kwargs, error=str(exc))
             raise
         except Exception as exc:
-            _reraise_if_elevation(exc)
+            try:
+                _reraise_if_elevation(exc)
+            except ElevatedWindowError as elevation_exc:
+                audit_log.log_tool_call(target="desktop", tool=fn.__name__, arguments=kwargs, error=str(elevation_exc))
+                raise
             logger.warning("desktop_action failed name=%s error=%s", fn.__name__, exc)
+            audit_log.log_tool_call(target="desktop", tool=fn.__name__, arguments=kwargs, error=str(exc))
             raise
+        else:
+            audit_log.log_tool_call(target="desktop", tool=fn.__name__, arguments=kwargs, result=result)
+            return result
 
     return wrapper
 
