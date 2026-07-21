@@ -11,13 +11,22 @@ from app.tools import desktop
 
 
 class _FakeWindow:
-    def __init__(self, title: str, pid: int = 1234, visible: bool = True, minimized: bool = False):
+    def __init__(
+        self,
+        title: str,
+        pid: int = 1234,
+        visible: bool = True,
+        minimized: bool = False,
+        descendants: list | None = None,
+    ):
         self._title = title
         self._pid = pid
         self._visible = visible
         self._minimized = minimized
+        self._descendants = descendants
         self.focused = False
         self.clicked_control = None
+        self.last_descendants_title_query = None
 
     def window_text(self) -> str:
         return self._title
@@ -34,9 +43,12 @@ class _FakeWindow:
     def set_focus(self) -> None:
         self.focused = True
 
-    def __getitem__(self, control_name: str):
-        self.clicked_control = control_name
-        return _FakeControl(control_name)
+    def descendants(self, title: str):
+        self.last_descendants_title_query = title
+        self.clicked_control = title
+        if self._descendants is not None:
+            return self._descendants
+        return [_FakeControl(title)]
 
 
 class _FakeControl:
@@ -271,6 +283,14 @@ def test_desktop_click_element_focuses_and_clicks_control(monkeypatch):
         "pid": 7,
         "process": "CalculatorApp.exe",
     }
+
+
+def test_desktop_click_element_raises_when_control_not_found(monkeypatch):
+    window = _FakeWindow("Calculadora", pid=7, descendants=[])
+    monkeypatch.setattr(desktop, "_find_window", lambda title: window)
+
+    with pytest.raises(ValueError):
+        desktop.desktop_click_element("Calculadora", "No existe")
 
 
 def test_find_window_raises_value_error_when_no_match(monkeypatch):

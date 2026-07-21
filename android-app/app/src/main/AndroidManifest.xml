@@ -8,16 +8,31 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!--
+    Permiso "dangerous" que define la app Termux para su Intent RUN_COMMAND
+    (ver phone/TermuxCommandRunner.kt). Solo lo puede otorgar el usuario (desde
+    Ajustes de Jarvis o a mano en Ajustes de Android) y solo tiene efecto si
+    Termux está instalado, ya que es Termux quien define este permiso.
+    -->
+    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+
+    <!--
     Necesario para que PackageManager.getLaunchIntentForPackage funcione con
     cualquier app instalada (phone_open_app): a partir de Android 11, un paquete
     solo es "visible" para otro si hay una declaración <queries> que lo cubra.
     Esto declara visibilidad sobre cualquier app con ícono de launcher.
+
+    El <package> de Termux es aparte: lanzar su RunCommandService es un intent
+    explícito (setClassName), que no necesita <queries> — pero sí hace falta
+    para poder chequear con PackageManager si Termux está instalado
+    (TermuxCommandRunner.isTermuxInstalled), si no getPackageInfo tira
+    NameNotFoundException aunque esté instalado.
     -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />
         </intent>
+        <package android:name="com.termux" />
     </queries>
 
     <application
@@ -70,6 +85,16 @@
         <service
             android:name=".phone.PhoneLinkService"
             android:foregroundServiceType="dataSync"
+            android:exported="false" />
+
+        <!--
+        Solo recibe el resultado asincrónico de un comando RUN_COMMAND corrido en
+        Termux, vía el PendingIntent que le manda TermuxCommandRunner. No exportado:
+        Termux invoca el PendingIntent directamente (identidad a nivel de SO), no
+        hace falta declarar visibilidad de intent-filter para eso.
+        -->
+        <service
+            android:name=".phone.TermuxResultService"
             android:exported="false" />
 
         <receiver

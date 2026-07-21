@@ -26,6 +26,11 @@ Editá `.env`:
 - `DESKTOP_CONTROL_ENABLED`: prende/apaga las tools `desktop_*` (control de
   mouse/teclado/ventanas de la PC, ver sección de seguridad más abajo).
   Default `true`.
+- `PHONE_SHELL_ENABLED`: prende/apaga `phone_run_command` (ejecución de shell
+  real en el celular vía Termux, ver sección de seguridad más abajo). Default
+  `true`. No confundir con la conexión del celular en sí (eso lo prende el
+  usuario desde la app Android) — este flag es una segunda llave del lado del
+  backend, específica para la tool más invasiva.
 
 ## Correr
 
@@ -84,6 +89,13 @@ pytest
   (el matching es por substring del título, así que puede haber falsos
   positivos). Ver sección de seguridad más abajo — es tan invasivo como el
   Accessibility Service del celular.
+- `app/tools/phone.py` — tools con `target="phone"`, despachadas al celular por
+  WebSocket (`app/phone_link.py`): `phone_open_app`, `phone_list_dir`/
+  `read_file`/`write_file`, `phone_tap`/`swipe`/`type_text`/`read_screen`/
+  `global_action` (Accessibility Service), y `phone_run_command` — shell real
+  en el celular vía Termux, el nivel más invasivo posible (código arbitrario,
+  no solo UI). Gateada por `PHONE_SHELL_ENABLED` y logueada como auditoría en
+  `phone_link.dispatch_to_phone`. Ver sección de seguridad más abajo.
 - `app/main.py` — endpoints `GET /api/health` y `POST /api/chat`.
 
 ## Agregar una tool nueva
@@ -123,3 +135,17 @@ las tool calls automáticamente contra el registry.
   devuelve `ElevatedWindowError` con un mensaje claro, pero no siempre es
   detectable: `pyautogui` puede mandar clicks/teclas "al vacío" sin tirar
   ningún error si el foco está en una ventana elevada.
+- **`phone_run_command` es ejecución de shell REAL en el celular, vía Termux**:
+  el modelo puede correr cualquier comando/script que corra en Termux —
+  código arbitrario, no acotado a interactuar con la UI. Es la tool más
+  invasiva de todo el proyecto, en la misma categoría de riesgo que el
+  Accessibility Service pero para código en vez de pantalla. No hay
+  sandboxing posible más allá de lo que el propio entorno de Termux limite.
+  Requiere que el usuario haya hecho, todo manual: instalar Termux desde
+  F-Droid (no la Play Store), `allow-external-apps=true` en
+  `~/.termux/termux.properties`, y otorgar el permiso Android
+  `com.termux.permission.RUN_COMMAND` (botón en la app, ver
+  `android-app/README.md`). Gateada del lado del backend por
+  `PHONE_SHELL_ENABLED=true` (default), y cada comando se loguea (herramienta,
+  argumentos, timestamp) en `phone_link.dispatch_to_phone` vía el logger
+  `jarvis.phone_link`, como rastro de auditoría dado el nivel de riesgo.

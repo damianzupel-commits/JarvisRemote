@@ -356,7 +356,22 @@ def desktop_click(x: int, y: int, button: str = "left", double: bool = False) ->
 def desktop_click_element(window_title: str, control_name: str) -> dict:
     window = _find_window(window_title)
     window.set_focus()
-    control = window[control_name]
+    # `_find_window` devuelve un UIAWrapper "crudo" (de Desktop().windows()), no una
+    # WindowSpecification de pywinauto (la que se obtiene de Application().window(...)
+    # y sí soporta indexado `[]` o `.child_window(...)` de forma perezosa). Un
+    # UIAWrapper no tiene ninguno de los dos — lo que sí tiene es `.descendants(...)`,
+    # que recorre el árbol de UI Automation desde acá y devuelve directamente wrappers
+    # ya resueltos (con `.click_input()` disponible). Bugs reales encontrados en dos
+    # intentos sucesivos contra un Notepad real (primero `window[...]`, después
+    # `child_window`); los tests mockeados no los detectaban porque el doble de
+    # prueba implementaba a mano lo que yo suponía que existía, replicando la
+    # suposición equivocada en vez de la API real de pywinauto.
+    matches = window.descendants(title=control_name)
+    if not matches:
+        raise ValueError(
+            f"No se encontró ningún control con nombre '{control_name}' dentro de la ventana"
+        )
+    control = matches[0]
     control.click_input()
     pid = window.process_id()
     return {

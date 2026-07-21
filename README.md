@@ -15,7 +15,8 @@ Celular (Android) ──Tailscale VPN──▶ PC Windows
     └──────────────────────────────────▶    └─ expone tools que el LLM puede invocar, ruteadas por
                                        │         `target: pc|phone` (filesystem, browser y control
                                        │         invasivo de escritorio —mouse/teclado/ventanas— en PC;
-                                       │         filesystem SAF + Accessibility Service en el celular)
+                                       │         filesystem SAF + Accessibility Service + shell real
+                                       │         vía Termux en el celular)
                                        │
                                        └─ tray-app (Python + pystray)
                                             corre/administra el backend y muestra estado
@@ -26,12 +27,14 @@ conexión WebSocket **saliente desde el celular** (mantenida por un foreground s
 en la app Android), autenticada con el mismo Bearer token. Mientras esté conectado, el
 LLM puede invocar tools con `target="phone"` (`phone_open_app`, `phone_list_dir`,
 `phone_read_file`, `phone_write_file`, `phone_tap`, `phone_swipe`, `phone_type_text`,
-`phone_read_screen`, `phone_global_action`) que se despachan al celular y esperan la
-respuesta correlacionada por id (ver `backend/app/phone_link.py` y
+`phone_read_screen`, `phone_global_action`, `phone_run_command`) que se despachan al
+celular y esperan la respuesta correlacionada por id (ver `backend/app/phone_link.py` y
 `backend/app/tools/phone.py`). El control de pantalla usa el Accessibility Service de
 Android (control total, riesgo asumido explícitamente); el filesystem del celular está
 sandboxeado a una carpeta elegida una vez vía Storage Access Framework (mismo modelo
-que `FS_ALLOWED_ROOT` para la PC).
+que `FS_ALLOWED_ROOT` para la PC); `phone_run_command` ejecuta shell real dentro de
+Termux vía su Intent RUN_COMMAND — el nivel más invasivo posible, código arbitrario en
+vez de solo UI, y requiere pasos manuales de setup (ver `android-app/README.md`).
 
 No hay ningún puerto expuesto a internet. El backend escucha en la IP privada que te da
 Tailscale (`100.x.x.x`), y solo dispositivos dentro de tu tailnet (tu PC y tu celular)
@@ -88,14 +91,26 @@ python run.py
    (`android-app/.../phone/`). Falta compilar y probar en un dispositivo real.
 6. ✅ Control invasivo de escritorio en la PC (paridad con el celular): `app/tools/desktop.py`
    (screenshot, listar/enfocar ventanas, click por coordenadas o por control de UI Automation,
-   escribir texto, teclas/combos, mover mouse, scroll), vía `pywinauto` + `pyautogui`. Flag
-   `DESKTOP_CONTROL_ENABLED` (default `true`) y log de auditoría (`jarvis.desktop`) — ver
-   `backend/README.md`. Pendiente: no se pudo validar clicks/teclas reales contra una sesión
-   gráfica de Windows real desde esta sesión de desarrollo (solo tests con pyautogui/pywinauto
-   mockeados); probar a mano antes de confiar en el control fino de ventanas elevadas o de
-   `desktop_click_element` contra apps reales.
-   ⬜ Más tools de PC (procesos, shell, notificaciones, etc.) una vez que esto esté probado a mano
-7. 🔶 Hotspot WiFi local como alternativa a Tailscale cuando el celular y la PC están en la
+   escribir texto, teclas/combos, mover mouse, scroll, `desktop_launch_app`), vía `pywinauto` +
+   `pyautogui`. Flag `DESKTOP_CONTROL_ENABLED` (default `true`) y log de auditoría
+   (`jarvis.desktop`) — ver `backend/README.md`. Validado en vivo contra el agente real corriendo
+   (abrir el Bloc de notas y escribirle texto, de punta a punta) — encontró y arregló 3 bugs reales
+   que los tests mockeados no detectaban: foco no garantizado al lanzar una app (ahora
+   `desktop_launch_app` espera la ventana nueva y fuerza foreground), `SetForegroundWindow` de
+   pywin32 lanzando excepción en vez de fallar en silencio, y matching de ventanas por substring de
+   título ambiguo con varias instancias de la misma app (ahora `desktop_focus_window` acepta `pid`).
+   ⬜ Más tools de PC (procesos, notificaciones, etc.) si hace falta más adelante.
+7. ✅ Ejecución de shell REAL en el celular vía Termux: `phone_run_command`
+   (`backend/app/tools/phone.py`) + `TermuxCommandRunner`/`TermuxResultService`
+   (`android-app/.../phone/`), usando el Intent RUN_COMMAND de Termux. El nivel más invasivo
+   posible del lado del celular — código arbitrario, no solo UI. Flag `PHONE_SHELL_ENABLED`
+   (default `true`) y log de auditoría (`jarvis.phone_link`) — ver `backend/README.md`. Compila
+   limpio (`gradlew.bat assembleDebug` → BUILD SUCCESSFUL) pero **no se pudo validar en vivo**:
+   requiere que el usuario instale Termux desde F-Droid, configure `allow-external-apps=true`, y
+   otorgue el permiso `com.termux.permission.RUN_COMMAND` — los tres son pasos manuales, ver
+   `android-app/README.md` para el detalle y lo específico que falta probar (sobre todo si Termux
+   preserva el extra de correlación al mandar el resultado por PendingIntent).
+8. 🔶 Hotspot WiFi local como alternativa a Tailscale cuando el celular y la PC están en la
    misma habitación (sin depender de router externo ni de internet).
    - ✅ Backend: como ya escucha en `0.0.0.0` (default de `HOST`), acepta conexiones por
      cualquier interfaz simultáneamente — Tailscale y hotspot/LAN a la vez, sin config

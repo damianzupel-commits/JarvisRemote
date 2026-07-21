@@ -9,10 +9,11 @@ Además, la app le da a Jarvis **control total del celular** (riesgo asumido
 explícitamente por el usuario): un foreground service mantiene una conexión
 WebSocket saliente hacia `/ws/phone` en el backend, y despacha ahí las tool
 calls con `target="phone"` — control de pantalla vía Accessibility Service
-(tocar, deslizar, escribir, leer cualquier app en pantalla) y filesystem del
-celular sandboxeado a una carpeta elegida vía Storage Access Framework. Ver
-`app/src/main/java/com/jarvisremote/app/phone/` y la sección "Control del
-celular" más abajo.
+(tocar, deslizar, escribir, leer cualquier app en pantalla), filesystem del
+celular sandboxeado a una carpeta elegida vía Storage Access Framework, y
+**ejecución de comandos de shell reales vía Termux** (código arbitrario, no
+solo interacción con la UI). Ver `app/src/main/java/com/jarvisremote/app/phone/`
+y la sección "Control del celular" más abajo.
 
 ## Estado: compila limpio, compilado y verificado desde línea de comandos
 
@@ -74,17 +75,32 @@ En la misma pantalla de Configuración, sección "Control del celular":
    leer y accionar sobre **cualquier app visible en pantalla** — incluidas
    apps de banca, 2FA, mensajería, etc. Solo habilitalo si entendés y aceptás
    ese riesgo.
-3. **Switch "Conexión con Jarvis"**: prende un foreground service que abre y
+3. **Ejecución de comandos (Termux)**: le da a Jarvis un shell real en el
+   celular — el nivel más invasivo posible, código arbitrario en vez de solo
+   UI. Tiene tres requisitos, **todos manuales, no automatizables desde la
+   app**:
+   1. Instalar [Termux desde F-Droid](https://f-droid.org/packages/com.termux/)
+      (la versión de Play Store está deprecada y no expone el Intent
+      RUN_COMMAND que usamos).
+   2. Dentro de Termux, poner `allow-external-apps=true` en
+      `~/.termux/termux.properties` (crear el archivo/carpeta si no existen) y
+      recargar Termux (`termux-reload-settings` o reabrir la app).
+   3. Botón **"Habilitar ejecución de comandos"** en esta pantalla: pide el
+      permiso Android `com.termux.permission.RUN_COMMAND` (dangerous — el
+      botón queda deshabilitado si Termux no está instalado, porque Android no
+      conoce ese permiso hasta que la app que lo define existe).
+4. **Switch "Conexión con Jarvis"**: prende un foreground service que abre y
    mantiene la conexión WebSocket saliente hacia `/ws/phone`. Se reconecta solo
    con backoff ante cortes, y se reinicia automáticamente tras un reboot del
    celular si lo dejaste prendido. En Android 13+ te va a pedir permiso de
    notificaciones (para mostrar el estado de la conexión en la barra).
 
-Con las tres cosas habilitadas, el LLM puede invocar desde el chat las tools
+Con todo eso habilitado, el LLM puede invocar desde el chat las tools
 `phone_open_app`, `phone_list_dir`, `phone_read_file`, `phone_write_file`,
-`phone_tap`, `phone_swipe`, `phone_type_text`, `phone_read_screen` y
-`phone_global_action` (definidas en `backend/app/tools/phone.py`), y verlas
-ejecutarse en tiempo real en el celular.
+`phone_tap`, `phone_swipe`, `phone_type_text`, `phone_read_screen`,
+`phone_global_action` y `phone_run_command` (definidas en
+`backend/app/tools/phone.py`), y verlas ejecutarse en tiempo real en el
+celular.
 
 ## Estructura
 
@@ -115,6 +131,8 @@ android-app/
           PhoneToolHandler.kt           # router de tool calls recibidas -> handler correspondiente
           ToolCallModels.kt             # (de)serialización del mensaje de tool_call / resultado
           AccessibilityUtils.kt         # chequea si el Accessibility Service está habilitado
+          TermuxCommandRunner.kt        # arma/despacha el Intent RUN_COMMAND a Termux y espera el resultado
+          TermuxResultService.kt        # Service liviano que recibe el resultado async vía PendingIntent
           BootReceiver.kt               # reinicia PhoneLinkService tras un reboot si estaba prendido
         ui/
           theme/                        # Color.kt, Type.kt, Theme.kt (Material3, dynamic color)
@@ -164,14 +182,48 @@ android-app/
   `..` en el path — mismo modelo de sandboxing que `FS_ALLOWED_ROOT` en la PC.
   `BootReceiver` reinicia la conexión tras un reboot solo si el usuario había
   dejado el switch prendido (persistido en DataStore).
+- **Ejecución de comandos (`TermuxCommandRunner` + `TermuxResultService`)**:
+  arma un Intent explícito (`setClassName("com.termux", "com.termux.app.RunCommandService")`,
+  acción `com.termux.RUN_COMMAND`) con el comando como `bash -c "<command>"`,
+  `RUN_COMMAND_BACKGROUND=true`, y un `PendingIntent.getService(...)` apuntando
+  a `TermuxResultService` para recibir el resultado. Se correlaciona por un id
+  de ejecución incremental (`ConcurrentHashMap<Int, CancellableContinuation>`)
+  que viaja como extra propio en el intent base del PendingIntent — depende de
+  que Termux preserve esos extras al mandar su resultado como intent "fill-in"
+  (comportamiento documentado de `PendingIntent`, replica el patrón del
+  ejemplo oficial del [wiki de RUN_COMMAND](https://github.com/termux/termux-app/wiki/RUN_COMMAND-Intent),
+  pero **no validado en un dispositivo real** — ver "Qué falta" abajo). Nunca
+  lanza excepción por timeout o por error de Termux (esos casos vuelven como
+  parte del JSON de resultado); sí lanza si falta el permiso Android o si ni
+  siquiera se pudo despachar el intent.
 
 ## Qué falta / próximos pasos razonables
 
 - Probar en un dispositivo real el control del celular: conectar el celular
   (ver `SETUP_RAPIDO.md`), elegir carpeta SAF, prender el switch de conexión,
   y pedirle a Jarvis desde el chat que abra una app / lea la pantalla / toque
-  algo — el código compila limpio pero todavía no se ejecutó contra un
-  celular real ni contra el backend real en esta sesión.
+  algo — el código compila limpio (`gradlew.bat assembleDebug` → BUILD
+  SUCCESSFUL) pero todavía no se ejecutó contra un celular real ni contra el
+  backend real en esta sesión.
+- **Ejecución de comandos (Termux) — esto es lo menos probado de todo el
+  proyecto**: nunca se corrió contra un dispositivo real con Termux instalado.
+  Falta validar en concreto:
+  - Que el permiso `com.termux.permission.RUN_COMMAND` efectivamente aparezca
+    en el diálogo estándar de Android al tocar "Habilitar ejecución de
+    comandos" (depende de que Termux ya esté instalado y haya declarado el
+    permiso).
+  - Que Termux corra el comando y **efectivamente invoque el
+    `PendingIntent.getService`** hacia `TermuxResultService` — y sobre todo,
+    que el extra propio `EXECUTION_ID` que le pusimos al intent base del
+    PendingIntent **sobreviva** al `pendingIntent.send()` de Termux (esa es la
+    parte del mecanismo que replica el ejemplo oficial pero que no se probó en
+    vivo). Si no sobrevive, hay que cambiar la correlación por otro mecanismo
+    (ej. un solo `TermuxResultService` con una cola FIFO si solo corremos un
+    comando a la vez, ya que igual no hay concurrencia real esperada acá).
+  - Que el parseo del bundle de resultado (`stdout`/`stderr`/`exitCode`/`err`/
+    `errmsg`) tenga los nombres de key correctos para la versión de Termux que
+    tenga instalada Damian (se confirmaron contra el código fuente de
+    `termux-app` en GitHub, pero versiones viejas de Termux podrían diferir).
 - Antes de probar contra el backend real: revisar `backend/.env` (HOST
   bindeado a la IP de Tailscale, API_KEY fijo) y que el backend esté corriendo.
 - Mejoras futuras no incluidas en este scaffold inicial: historial persistente

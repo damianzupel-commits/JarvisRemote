@@ -95,6 +95,12 @@ object PhoneToolHandler {
                 buildJsonObject { put("action_performed", JsonPrimitive(true)) }
             }
 
+            "phone_run_command" -> TermuxCommandRunner.run(
+                context,
+                arguments.reqString("command"),
+                arguments.optInt("timeout", 30) * 1000L,
+            )
+
             else -> throw IllegalArgumentException("Tool de celular desconocida: '$tool'")
         }
     }

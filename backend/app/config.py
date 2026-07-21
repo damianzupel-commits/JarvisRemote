@@ -38,6 +38,14 @@ class Settings:
 
     phone_tool_timeout: float = float(os.getenv("PHONE_TOOL_TIMEOUT", "30"))
 
+    # Ejecución de comandos de shell reales en el celular vía Termux
+    # (ver app/tools/phone.py::phone_run_command). Es el nivel más invasivo
+    # posible del lado del celular: código arbitrario, no solo interacción con
+    # la UI. Prendido por default (mismo criterio que DESKTOP_CONTROL_ENABLED:
+    # el usuario ya pidió explícitamente la versión sin fricción), pero queda
+    # como flag real para poder apagarlo sin tocar código.
+    phone_shell_enabled: bool = _bool(os.getenv("PHONE_SHELL_ENABLED"), True)
+
 
 settings = Settings()
 

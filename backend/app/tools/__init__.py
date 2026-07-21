@@ -78,7 +78,20 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
     if tool.target == "phone":
         from ..phone_link import dispatch_to_phone
 
-        return await dispatch_to_phone(name, arguments)
+        # Si la tool trae su propio argumento "timeout" (ej. phone_run_command,
+        # que le dice a Termux cuánto esperar un comando), extenderlo también al
+        # timeout con el que el backend espera la respuesta por WebSocket —
+        # si no, el backend podría rendirse (settings.phone_tool_timeout, 30s
+        # default) antes de que el celular termine de esperar su propio timeout
+        # más largo, dejando el comando huérfano del lado del celular.
+        dispatch_timeout = None
+        if "timeout" in arguments:
+            try:
+                dispatch_timeout = float(arguments["timeout"]) + 5
+            except (TypeError, ValueError):
+                dispatch_timeout = None
+
+        return await dispatch_to_phone(name, arguments, timeout=dispatch_timeout)
 
     result = tool.handler(**arguments)
     if inspect.isawaitable(result):

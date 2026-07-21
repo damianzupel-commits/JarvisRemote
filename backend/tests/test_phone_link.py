@@ -102,3 +102,58 @@ async def test_unregister_fails_pending_calls():
 async def test_handle_incoming_ignores_unknown_or_stale_id():
     # No debe explotar si llega una respuesta para un id que no está pendiente.
     await handle_incoming({"id": "no-existe", "result": {}})
+
+
+@pytest.mark.anyio
+async def test_dispatch_phone_run_command_blocked_when_shell_disabled(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_shell_enabled", False)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    with pytest.raises(PermissionError):
+        await dispatch_to_phone("phone_run_command", {"command": "echo hola"})
+    # Ni siquiera debería haber intentado mandarlo por WebSocket.
+    assert ws.sent == []
+
+
+@pytest.mark.anyio
+async def test_dispatch_phone_run_command_allowed_when_shell_enabled(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_shell_enabled", True)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    task = asyncio.create_task(
+        dispatch_to_phone("phone_run_command", {"command": "echo hola"}, timeout=5)
+    )
+    await asyncio.sleep(0.01)
+    assert len(ws.sent) == 1
+    sent = json.loads(ws.sent[0])
+    assert sent["tool"] == "phone_run_command"
+
+    await handle_incoming({"id": sent["id"], "result": {"stdout": "hola\n", "exit_code": 0}})
+    result = await task
+    assert result == {"stdout": "hola\n", "exit_code": 0}
+
+
+@pytest.mark.anyio
+async def test_dispatch_phone_run_command_logs_audit_line(monkeypatch, caplog):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_shell_enabled", True)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    with caplog.at_level("INFO", logger="jarvis.phone_link"):
+        task = asyncio.create_task(
+            dispatch_to_phone("phone_run_command", {"command": "rm -rf algo"}, timeout=5)
+        )
+        await asyncio.sleep(0.01)
+        sent = json.loads(ws.sent[0])
+        await handle_incoming({"id": sent["id"], "result": {}})
+        await task
+
+    assert any("phone_shell" in msg and "rm -rf algo" in msg for msg in caplog.messages)

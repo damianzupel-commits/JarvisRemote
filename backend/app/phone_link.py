@@ -36,6 +36,11 @@ class SendsText(Protocol):
 _phone_ws: SendsText | None = None
 _pending: dict[str, asyncio.Future] = {}
 
+# Tools que ejecutan shell real en el celular (vía Termux) en vez de solo
+# interactuar con la UI — nivel de riesgo distinto, se gatean con su propio
+# flag (PHONE_SHELL_ENABLED) y se loguean como rastro de auditoría.
+_SHELL_TOOL_NAMES = {"phone_run_command"}
+
 
 async def register_phone(ws: SendsText) -> None:
     global _phone_ws
@@ -77,6 +82,14 @@ async def handle_incoming(message: dict) -> None:
 
 
 async def dispatch_to_phone(tool_name: str, arguments: dict[str, Any], timeout: float | None = None) -> Any:
+    if tool_name in _SHELL_TOOL_NAMES:
+        if not settings.phone_shell_enabled:
+            raise PermissionError(
+                "Ejecución de comandos en el celular deshabilitada. Setear "
+                "PHONE_SHELL_ENABLED=true en backend/.env para habilitarla."
+            )
+        logger.info("phone_shell: tool=%s arguments=%s", tool_name, arguments)
+
     timeout = timeout if timeout is not None else settings.phone_tool_timeout
     if _phone_ws is None:
         raise PhoneNotConnectedError("No hay ningún celular conectado a Jarvis en este momento")

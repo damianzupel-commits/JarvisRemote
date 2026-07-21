@@ -52,6 +52,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jarvisremote.app.phone.AccessibilityUtils
 import com.jarvisremote.app.phone.PhoneLinkService
+import com.jarvisremote.app.phone.TermuxCommandRunner
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,16 +67,23 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
 
     val context = LocalContext.current
     var accessibilityEnabled by remember { mutableStateOf(AccessibilityUtils.isEnabled(context)) }
+    var termuxInstalled by remember { mutableStateOf(TermuxCommandRunner.isTermuxInstalled(context)) }
+    var termuxPermissionGranted by remember { mutableStateOf(TermuxCommandRunner.hasPermission(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 accessibilityEnabled = AccessibilityUtils.isEnabled(context)
+                termuxInstalled = TermuxCommandRunner.isTermuxInstalled(context)
+                termuxPermissionGranted = TermuxCommandRunner.hasPermission(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    val termuxPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> termuxPermissionGranted = granted }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -192,6 +200,32 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
             )
             OutlinedButton(onClick = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
                 Text("Abrir Ajustes de Accesibilidad")
+            }
+
+            HorizontalDivider()
+            Text("Ejecución de comandos (Termux)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Le da a Jarvis ejecución de comandos de shell reales en el celular (vía Termux) — " +
+                    "código arbitrario, no solo interacción con la UI. Requiere Termux instalado " +
+                    "desde F-Droid (no la Play Store) con allow-external-apps=true en " +
+                    "~/.termux/termux.properties. Habilitalo solo si entendés y aceptás ese riesgo.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Termux instalado: " + if (termuxInstalled) "sí" else "no",
+                color = if (termuxInstalled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                "Permiso RUN_COMMAND: " + if (termuxPermissionGranted) "otorgado" else "no otorgado",
+                color = if (termuxPermissionGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(
+                onClick = { termuxPermissionLauncher.launch(TermuxCommandRunner.RUN_COMMAND_PERMISSION) },
+                enabled = termuxInstalled && !termuxPermissionGranted,
+            ) {
+                Text("Habilitar ejecución de comandos")
             }
 
             Row(

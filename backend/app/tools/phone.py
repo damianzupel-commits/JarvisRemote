@@ -13,6 +13,12 @@ Equivalentes en el celular a las tools de PC (filesystem, browser/pantalla):
   `phone_global_action`: control genérico de pantalla vía el Accessibility
   Service de la app Android — puede leer y accionar sobre cualquier app
   visible en pantalla (incluidas apps de banca, 2FA, WhatsApp, etc.).
+- `phone_run_command`: ejecución de shell REAL en el celular vía Termux (Intent
+  RUN_COMMAND) — código arbitrario, no solo interacción con la UI. El nivel más
+  invasivo posible del lado del celular; gateado por `PHONE_SHELL_ENABLED` y
+  logueado como auditoría en `phone_link.dispatch_to_phone`. Requiere pasos
+  manuales del usuario (Termux instalado desde F-Droid, allow-external-apps,
+  permiso Android otorgado) — ver docstring de la tool y el README.
 """
 
 from . import register_tool
@@ -202,3 +208,38 @@ def phone_read_screen() -> dict:
 )
 def phone_global_action(action: str) -> dict:
     _not_routed("phone_global_action")
+
+
+@register_tool(
+    name="phone_run_command",
+    description=(
+        "Ejecuta un comando de shell REAL en el celular (como 'bash -c <command>'), delegando en "
+        "Termux vía su Intent RUN_COMMAND. Es el nivel más invasivo posible del lado del celular: "
+        "código/comandos arbitrarios, no solo interacción con la UI — usarlo para lo que necesite un "
+        "intérprete o herramientas de línea de comandos de verdad (scripts, python, git, curl, etc.), "
+        "no para tocar la pantalla (para eso están phone_tap/phone_swipe/phone_type_text/"
+        "phone_global_action). Requiere que el usuario tenga Termux instalado desde F-Droid (la "
+        "versión de Play Store no sirve), 'allow-external-apps=true' en su "
+        "~/.termux/termux.properties, y el permiso Android com.termux.permission.RUN_COMMAND "
+        "otorgado a la app — si falta algo de eso, la tool falla con un mensaje explicando qué "
+        "configurar, avisale eso al usuario en vez de asumir que el comando corrió. Devuelve stdout, "
+        "stderr y exit_code."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "Comando de shell a ejecutar (se corre como `bash -c \"<command>\"` dentro de Termux).",
+            },
+            "timeout": {
+                "type": "integer",
+                "description": "Segundos a esperar el resultado antes de darlo por perdido (default 30).",
+            },
+        },
+        "required": ["command"],
+    },
+    target="phone",
+)
+def phone_run_command(command: str, timeout: int = 30) -> dict:
+    _not_routed("phone_run_command")
