@@ -22,10 +22,17 @@ Privilege Isolation). Se detecta y se devuelve un error claro donde se puede
 (`ElevatedWindowError`), pero pyautogui en particular puede mandar clicks/teclas
 "al vacío" sin tirar ningún error cuando el foco está en una ventana elevada —
 eso no se puede detectar de forma confiable desde acá.
+
+`desktop_launch_app` tiene un blocklist de utilidades de Windows obviamente
+destructivas (`_check_launch_blocklist`) — mitigación de "evitar el desastre
+obvio" por matching de texto, no un sandbox real. El resto de las tools
+(click, type, scroll) no tienen un análogo: no hay forma razonable de inferir
+intención destructiva de coordenadas o texto genérico.
 """
 
 import logging
 import os
+import re
 import subprocess
 import time
 from functools import wraps
@@ -38,6 +45,36 @@ from ..config import settings
 from . import register_tool
 
 logger = logging.getLogger("jarvis.desktop")
+
+# Blocklist liviano para desktop_launch_app: mitigación de "evitar el desastre
+# obvio" análoga a la de phone_run_command (ver phone_link._check_command_blocklist),
+# NO un sandbox real. Bloquea lanzar utilidades de Windows conocidas por ser
+# destructivas (formatear, borrar particiones/shadow copies, tocar la config de
+# arranque) por nombre/patrón. El resto de las tools de escritorio (click, type,
+# scroll) no tienen un análogo razonable acá: no hay forma de inferir "intención
+# destructiva" a partir de coordenadas o texto genérico tipeado.
+_DESTRUCTIVE_LAUNCH_PATTERNS: list[tuple[str, re.Pattern]] = [
+    ("format (formatear un disco)", re.compile(r"\bformat(\.com)?\b", re.IGNORECASE)),
+    ("diskpart (partición de discos)", re.compile(r"\bdiskpart(\.exe)?\b", re.IGNORECASE)),
+    ("cipher /w (borrado seguro de espacio libre)", re.compile(r"\bcipher\b[^\n]*\s/w\b", re.IGNORECASE)),
+    ("vssadmin delete (borra shadow copies/backups)", re.compile(r"\bvssadmin\b[^\n]*\bdelete\b", re.IGNORECASE)),
+    ("bcdedit (config de arranque)", re.compile(r"\bbcdedit(\.exe)?\b", re.IGNORECASE)),
+]
+
+
+class DestructiveLaunchBlockedError(PermissionError):
+    """El path_or_name matcheó el blocklist de utilidades obviamente destructivas."""
+
+
+def _check_launch_blocklist(path_or_name: str) -> None:
+    for name, pattern in _DESTRUCTIVE_LAUNCH_PATTERNS:
+        if pattern.search(path_or_name):
+            logger.warning("desktop_launch_app: lanzamiento BLOQUEADO (%s): %r", name, path_or_name)
+            raise DestructiveLaunchBlockedError(
+                f"Lanzamiento rechazado por el blocklist de seguridad (patrón: {name}). "
+                "Es una mitigación de 'evitar el desastre obvio' por matching de texto, "
+                "no un sandbox real."
+            )
 
 # Cuánto esperar (polling) a que aparezca una ventana nueva después de lanzar
 # una app, y con qué intervalo. Ver desktop_launch_app: el estado de foco no
@@ -489,7 +526,10 @@ def desktop_scroll(amount: int, x: Optional[int] = None, y: Optional[int] = None
         "porque si hay varias ventanas de la misma app abiertas (ej. varios Bloc de notas de intentos "
         "anteriores) el matching por título puede agarrar la ventana equivocada, no la que se acaba de "
         "lanzar. Ejemplos válidos: 'notepad', 'notepad.exe', 'calc', "
-        "'C:\\\\Windows\\\\System32\\\\notepad.exe', 'https://google.com'."
+        "'C:\\\\Windows\\\\System32\\\\notepad.exe', 'https://google.com'. Hay un blocklist de "
+        "utilidades de Windows obviamente destructivas (format, diskpart, cipher /w, vssadmin "
+        "delete, bcdedit) que rechaza el lanzamiento antes de intentarlo — mitigación de 'evitar "
+        "el desastre obvio', no un sandbox real."
     ),
     parameters={
         "type": "object",
@@ -504,6 +544,7 @@ def desktop_scroll(amount: int, x: Optional[int] = None, y: Optional[int] = None
 )
 @_audited
 def desktop_launch_app(path_or_name: str) -> dict:
+    _check_launch_blocklist(path_or_name)
     before = _enum_visible_titled_windows()
 
     try:

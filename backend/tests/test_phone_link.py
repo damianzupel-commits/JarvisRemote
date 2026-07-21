@@ -5,6 +5,7 @@ import pytest
 
 from app import phone_link
 from app.phone_link import (
+    DestructiveCommandBlockedError,
     PhoneNotConnectedError,
     PhoneToolError,
     dispatch_to_phone,
@@ -157,3 +158,91 @@ async def test_dispatch_phone_run_command_logs_audit_line(monkeypatch, caplog):
         await task
 
     assert any("phone_shell" in msg and "rm -rf algo" in msg for msg in caplog.messages)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf /",
+        "rm -rf ~",
+        "rm -fr /",
+        "sudo rm -rf /",
+        "  rm   -rf    /  ",
+        "mkfs.ext4 /dev/block/mmcblk0p1",
+        "mkfs /dev/sda1",
+        "dd if=/dev/zero of=/dev/sda",
+        "dd if=/dev/zero of=/dev/sda bs=1M",
+        ":(){ :|:& };:",
+        "chmod -R 777 /",
+        "chown -R user:user /",
+        "echo pwned > /dev/sda",
+    ],
+)
+async def test_dispatch_blocks_destructive_command_patterns(command, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_shell_enabled", True)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    with pytest.raises(DestructiveCommandBlockedError):
+        await dispatch_to_phone("phone_run_command", {"command": command})
+
+    # Ni siquiera debería haber llegado a mandarse por WebSocket.
+    assert ws.sent == []
+
+
+@pytest.mark.anyio
+async def test_dispatch_blocked_command_logs_a_warning(monkeypatch, caplog):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_shell_enabled", True)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    with caplog.at_level("WARNING", logger="jarvis.phone_link"):
+        with pytest.raises(DestructiveCommandBlockedError):
+            await dispatch_to_phone("phone_run_command", {"command": "rm -rf /"})
+
+    assert any("BLOQUEADO" in msg for msg in caplog.messages)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo hola",
+        "rm -rf /tmp/foo",
+        "rm archivo.txt",
+        "rm -rf ./build",
+        "rm -rf output/",
+        "ls -la /",
+        "chmod -R 755 ./myproject",
+        "chmod 644 archivo.txt",
+        "dd if=input.img of=output.img",
+        "git clone https://example.com/repo.git",
+        "python script.py",
+        "cat /etc/hostname",
+    ],
+)
+async def test_dispatch_allows_legitimate_commands_that_look_similar(command, monkeypatch):
+    """Casos pensados para no bloquearse por accidente (falsos positivos) contra el
+    blocklist — rutas relativas, comandos de solo-lectura, y variantes que se
+    parecen superficialmente a un patrón bloqueado pero no lo son."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_shell_enabled", True)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    task = asyncio.create_task(
+        dispatch_to_phone("phone_run_command", {"command": command}, timeout=5)
+    )
+    await asyncio.sleep(0.01)
+    assert len(ws.sent) == 1
+    sent = json.loads(ws.sent[0])
+
+    await handle_incoming({"id": sent["id"], "result": {"stdout": "", "exit_code": 0}})
+    result = await task
+    assert result == {"stdout": "", "exit_code": 0}

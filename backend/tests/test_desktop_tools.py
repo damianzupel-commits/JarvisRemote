@@ -317,6 +317,48 @@ def _no_real_window_polling(monkeypatch):
     monkeypatch.setattr(desktop, "_enum_visible_titled_windows", lambda: {})
 
 
+@pytest.mark.parametrize(
+    "path_or_name",
+    [
+        "format",
+        "format.com",
+        "FORMAT C:",
+        "diskpart",
+        "diskpart.exe",
+        "cipher /w:C:\\",
+        "vssadmin delete shadows /all /quiet",
+        "bcdedit /set {default} recoveryenabled no",
+    ],
+)
+def test_desktop_launch_app_blocks_destructive_utilities(path_or_name, monkeypatch):
+    monkeypatch.setattr(desktop.os, "startfile", lambda path: pytest.fail("no debería llegar acá"))
+
+    with pytest.raises(desktop.DestructiveLaunchBlockedError):
+        desktop.desktop_launch_app(path_or_name)
+
+
+@pytest.mark.parametrize(
+    "path_or_name",
+    [
+        "notepad",
+        "notepad.exe",
+        "calc",
+        "chrome.exe",
+        "C:\\Program Files\\MyFormatter\\formatter_tool.exe",
+        "https://google.com",
+    ],
+)
+def test_desktop_launch_app_allows_legitimate_names_that_look_similar(path_or_name, monkeypatch):
+    """Casos pensados para no bloquearse por accidente — nombres de apps legítimas,
+    incluida una que contiene 'format' como parte de otra palabra."""
+    monkeypatch.setattr(desktop.os, "startfile", lambda path: None)
+    monkeypatch.setattr(desktop, "_wait_for_new_window", lambda before: None)
+
+    result = desktop.desktop_launch_app(path_or_name)
+
+    assert result["launched"] == path_or_name
+
+
 def test_desktop_launch_app_uses_startfile_by_default(monkeypatch):
     calls = []
     monkeypatch.setattr(desktop.os, "startfile", lambda path: calls.append(path))

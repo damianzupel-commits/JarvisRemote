@@ -149,3 +149,13 @@ las tool calls automáticamente contra el registry.
   `PHONE_SHELL_ENABLED=true` (default), y cada comando se loguea (herramienta,
   argumentos, timestamp) en `phone_link.dispatch_to_phone` vía el logger
   `jarvis.phone_link`, como rastro de auditoría dado el nivel de riesgo.
+- **Blocklist de comandos/lanzamientos obviamente destructivos** —
+  `phone_link._check_command_blocklist` (para `phone_run_command`: `rm -rf` de
+  la raíz/home, `mkfs`, `dd` hacia un block device, fork bombs, `chmod`/`chown -R`
+  sobre la raíz) y `desktop._check_launch_blocklist` (para `desktop_launch_app`:
+  `format`, `diskpart`, `cipher /w`, `vssadmin delete`, `bcdedit`). **Esto es una
+  mitigación de "evitar el desastre obvio" por matching de texto sobre patrones
+  conocidos — no es un sandbox real ni una garantía de seguridad completa.**
+  Cualquier comando/lanzamiento que no matchee esos patrones se ejecuta igual
+  sin restricciones; un atacante (o el propio modelo, por error) puede lograr
+  el mismo resultado destructivo por una ruta que el blocklist no cubra.

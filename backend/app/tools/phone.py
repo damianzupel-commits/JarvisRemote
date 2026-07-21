@@ -18,7 +18,10 @@ Equivalentes en el celular a las tools de PC (filesystem, browser/pantalla):
   invasivo posible del lado del celular; gateado por `PHONE_SHELL_ENABLED` y
   logueado como auditoría en `phone_link.dispatch_to_phone`. Requiere pasos
   manuales del usuario (Termux instalado desde F-Droid, allow-external-apps,
-  permiso Android otorgado) — ver docstring de la tool y el README.
+  permiso Android otorgado) — ver docstring de la tool y el README. Tiene un
+  blocklist de patrones obviamente destructivos (`phone_link._check_command_blocklist`)
+  — mitigación de "evitar el desastre obvio" por matching de texto, no un
+  sandbox real.
 """
 
 from . import register_tool
@@ -223,7 +226,11 @@ def phone_global_action(action: str) -> dict:
         "~/.termux/termux.properties, y el permiso Android com.termux.permission.RUN_COMMAND "
         "otorgado a la app — si falta algo de eso, la tool falla con un mensaje explicando qué "
         "configurar, avisale eso al usuario en vez de asumir que el comando corrió. Devuelve stdout, "
-        "stderr y exit_code."
+        "stderr y exit_code. Hay un blocklist de patrones obviamente destructivos (rm -rf de la raíz "
+        "o el home, mkfs, dd hacia un block device, fork bombs, chmod/chown -R sobre la raíz) que "
+        "rechaza el comando antes de mandarlo — es una mitigación de 'evitar el desastre obvio' por "
+        "matching de texto, NO un sandbox real ni una garantía de seguridad completa: cualquier "
+        "comando que no matchee esos patrones se ejecuta igual sin restricciones."
     ),
     parameters={
         "type": "object",
