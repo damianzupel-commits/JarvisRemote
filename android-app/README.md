@@ -200,6 +200,25 @@ android-app/
 
 ## Qué falta / próximos pasos razonables
 
+- **Blocklist de apps sensibles en el Accessibility Service (`AccessibilityBlocklist.kt`
+  + `JarvisAccessibilityService.kt` + sección nueva en Ajustes) — compilado, no
+  instalado, pendiente de validar en un dispositivo real.** `tap`/`swipe`/
+  `typeText`/`globalAction`/`readScreen` ahora chequean la app en foreground
+  (`rootInActiveWindow?.packageName`) contra `SettingsRepository.blockedPackages`
+  antes de actuar, y se niegan con `SensitiveAppBlockedException` si matchea — es
+  una mitigación por nombre de paquete exacto, no un sandbox real (ver el
+  docstring de `isForegroundAppBlocked`, que además es la parte que sí tiene
+  test unitario JVM puro, sin necesitar Android — la lógica de chequeo del
+  `AccessibilityService` en sí no se puede testear sin instrumentación, mismo
+  problema que el cifrado del API key). Viene con una lista default chica de
+  apps de 2FA conocidas (Google Authenticator, Microsoft Authenticator, Authy);
+  **falta que Damian agregue sus bancos específicos** desde Ajustes → "Apps
+  bloqueadas para Jarvis" (el package name de cada banco se saca con
+  `adb shell pm list packages | grep <nombre>` con el celular conectado). No se
+  instaló el APK actualizado esta sesión a propósito — el celular estaba lejos
+  de la PC, usándose por datos móviles como único acceso remoto, y esta feature
+  no toca la conexión en sí pero cualquier reinstalación sí la corta
+  momentáneamente (ver más abajo).
 - **Cifrado del API key (`ApiKeyCrypto.kt` + `SettingsRepository.kt`) — pendiente
   de validar en un dispositivo real.** Compila limpio (`gradlew.bat assembleDebug`
   → BUILD SUCCESSFUL) y no rompió los tests JVM existentes, pero

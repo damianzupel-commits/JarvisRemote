@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.util.UUID
 import kotlinx.coroutines.flow.Flow
@@ -11,6 +12,19 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "jarvis_settings")
+
+/**
+ * Punto de partida para el blocklist de apps sensibles del Accessibility Service
+ * (ver `JarvisAccessibilityService`/`AccessibilityBlocklist.kt`) — solo cubre apps
+ * de 2FA conocidas y de alcance global; el usuario tiene que agregar sus bancos
+ * específicos desde Ajustes (el package name se puede sacar con
+ * `adb shell pm list packages | grep <banco>` con el celular conectado).
+ */
+val DEFAULT_BLOCKED_PACKAGES = setOf(
+    "com.google.android.apps.authenticator2", // Google Authenticator
+    "com.azure.authenticator", // Microsoft Authenticator
+    "com.authy.authy", // Twilio Authy
+)
 
 data class JarvisSettings(
     val backendUrl: String,
@@ -25,6 +39,12 @@ data class JarvisSettings(
      * en cada intento de conexión. Ver `BackendUrlResolver`.
      */
     val lastKnownDirectUrl: String = "",
+    /**
+     * Package names sobre los que el Accessibility Service se niega a actuar (ver
+     * `AccessibilityBlocklist.isForegroundAppBlocked`) — mitigación por nombre de
+     * paquete, no una garantía completa. Configurable desde Ajustes.
+     */
+    val blockedPackages: Set<String> = DEFAULT_BLOCKED_PACKAGES,
 )
 
 /**
@@ -42,6 +62,7 @@ class SettingsRepository(private val context: Context) {
         val PHONE_FOLDER_URI = stringPreferencesKey("phone_folder_uri")
         val PHONE_LINK_ENABLED = booleanPreferencesKey("phone_link_enabled")
         val LAST_KNOWN_DIRECT_URL = stringPreferencesKey("last_known_direct_url")
+        val BLOCKED_PACKAGES = stringSetPreferencesKey("blocked_packages")
     }
 
     val settingsFlow: Flow<JarvisSettings> = context.dataStore.data.map { prefs ->
@@ -55,6 +76,7 @@ class SettingsRepository(private val context: Context) {
             phoneFolderUri = prefs[Keys.PHONE_FOLDER_URI] ?: "",
             phoneLinkEnabled = prefs[Keys.PHONE_LINK_ENABLED] ?: false,
             lastKnownDirectUrl = prefs[Keys.LAST_KNOWN_DIRECT_URL] ?: "",
+            blockedPackages = prefs[Keys.BLOCKED_PACKAGES] ?: DEFAULT_BLOCKED_PACKAGES,
         )
     }
 
@@ -84,5 +106,9 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setPhoneLinkEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.PHONE_LINK_ENABLED] = enabled }
+    }
+
+    suspend fun saveBlockedPackages(packages: Set<String>) {
+        context.dataStore.edit { it[Keys.BLOCKED_PACKAGES] = packages }
     }
 }

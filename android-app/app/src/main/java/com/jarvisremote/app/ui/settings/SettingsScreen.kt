@@ -64,6 +64,9 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
     var url by rememberSaveable(settings.backendUrl) { mutableStateOf(settings.backendUrl) }
     var apiKey by rememberSaveable(settings.apiKey) { mutableStateOf(settings.apiKey) }
     var showApiKey by rememberSaveable { mutableStateOf(false) }
+    var blockedPackagesText by rememberSaveable(settings.blockedPackages) {
+        mutableStateOf(settings.blockedPackages.joinToString(", "))
+    }
 
     val context = LocalContext.current
     var accessibilityEnabled by remember { mutableStateOf(AccessibilityUtils.isEnabled(context)) }
@@ -200,6 +203,24 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
             )
             OutlinedButton(onClick = { context.startActivity(Intent(AndroidSettings.ACTION_ACCESSIBILITY_SETTINGS)) }) {
                 Text("Abrir Ajustes de Accesibilidad")
+            }
+
+            Text(
+                "Apps bloqueadas para Jarvis (Accessibility Service se niega a actuar sobre estas): " +
+                    "lista de package names separados por coma. Viene con algunas apps de 2FA conocidas " +
+                    "de ejemplo — agregá acá tus bancos específicos (el package name se ve con " +
+                    "'adb shell pm list packages | grep <banco>'). Es una mitigación por nombre de " +
+                    "paquete, no una garantía completa.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedTextField(
+                value = blockedPackagesText,
+                onValueChange = { blockedPackagesText = it },
+                label = { Text("Apps bloqueadas (package names, separados por coma)") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(onClick = { viewModel.saveBlockedPackages(blockedPackagesText) }) {
+                Text("Guardar lista de apps bloqueadas")
             }
 
             HorizontalDivider()

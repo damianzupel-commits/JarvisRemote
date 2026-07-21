@@ -7,8 +7,10 @@ import android.graphics.Rect
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.jarvisremote.app.data.SettingsRepository
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonPrimitive
@@ -23,6 +25,12 @@ import kotlinx.serialization.json.buildJsonObject
  *
  * Riesgo asumido explícitamente por el usuario: este servicio puede leer y accionar
  * sobre cualquier app en pantalla, incluidas apps de banca, 2FA, mensajería, etc.
+ *
+ * Mitigación parcial: cada acción chequea la app en foreground contra un blocklist
+ * configurable (`SettingsRepository.blockedPackages`, ver `AccessibilityBlocklist.kt`)
+ * y se niega si matchea — por nombre de paquete exacto, no un sandbox real. Viene
+ * con una lista default de apps de 2FA conocidas; agregar bancos específicos desde
+ * Ajustes.
  */
 class JarvisAccessibilityService : AccessibilityService() {
 
@@ -66,13 +74,30 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
+    /**
+     * Chequea la app en foreground contra el blocklist configurable (ver
+     * `AccessibilityBlocklist.kt` / `SettingsRepository.blockedPackages`) y tira
+     * [SensitiveAppBlockedException] si está bloqueada. Se llama al principio de
+     * cada acción — mitigación por nombre de paquete, no una garantía completa
+     * (ver el docstring de `isForegroundAppBlocked`).
+     */
+    private suspend fun assertForegroundAppNotBlocked() {
+        val blockedPackages = SettingsRepository(applicationContext).settingsFlow.first().blockedPackages
+        val currentPackage = rootInActiveWindow?.packageName?.toString()
+        if (isForegroundAppBlocked(currentPackage, blockedPackages)) {
+            throw SensitiveAppBlockedException(currentPackage!!)
+        }
+    }
+
     suspend fun tap(x: Int, y: Int) {
+        assertForegroundAppNotBlocked()
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val stroke = GestureDescription.StrokeDescription(path, 0, 50)
         dispatchGestureAwait(GestureDescription.Builder().addStroke(stroke).build())
     }
 
     suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int) {
+        assertForegroundAppNotBlocked()
         val path = Path().apply {
             moveTo(x1.toFloat(), y1.toFloat())
             lineTo(x2.toFloat(), y2.toFloat())
@@ -103,7 +128,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun typeText(text: String) {
+    suspend fun typeText(text: String) {
+        assertForegroundAppNotBlocked()
         val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: throw IllegalStateException(
                 "No hay ningún campo de texto enfocado. Usá phone_tap para enfocarlo primero."
@@ -115,7 +141,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (!ok) throw RuntimeException("El campo enfocado rechazó el texto")
     }
 
-    fun globalAction(action: String) {
+    suspend fun globalAction(action: String) {
+        assertForegroundAppNotBlocked()
         val code = when (action) {
             "back" -> GLOBAL_ACTION_BACK
             "home" -> GLOBAL_ACTION_HOME
@@ -128,7 +155,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
     }
 
-    fun readScreen(): kotlinx.serialization.json.JsonObject {
+    suspend fun readScreen(): kotlinx.serialization.json.JsonObject {
+        assertForegroundAppNotBlocked()
         val root = rootInActiveWindow
             ?: return buildJsonObject { put("nodes", buildJsonArray {}) }
         val nodes = buildJsonArray {

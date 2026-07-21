@@ -34,6 +34,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { settingsRepository.savePhoneFolderUri(uri) }
     }
 
+    /** [rawText] es una lista separada por comas de package names (ver SettingsScreen). */
+    fun saveBlockedPackages(rawText: String) {
+        val packages = rawText.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+        viewModelScope.launch { settingsRepository.saveBlockedPackages(packages) }
+    }
+
     fun setPhoneLinkEnabled(enabled: Boolean) {
         viewModelScope.launch {
             settingsRepository.setPhoneLinkEnabled(enabled)
