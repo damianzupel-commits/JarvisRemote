@@ -19,6 +19,10 @@ tray-app/backend.log
 # Log de auditoría estructurado (backend/app/audit_log.py), rota por tamaño
 backend/audit.log*
 
+# Certificado TLS self-signed (backend/certs/generate_cert.sh regenera esto) —
+# la clave privada nunca se commitea. El script y el README de esa carpeta sí.
+backend/certs/*.pem
+
 # Android
 android-app/.gradle/
 android-app/local.properties

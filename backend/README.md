@@ -31,6 +31,9 @@ Editá `.env`:
   `true`. No confundir con la conexión del celular en sí (eso lo prende el
   usuario desde la app Android) — este flag es una segunda llave del lado del
   backend, específica para la tool más invasiva.
+- `TLS_ENABLED`: sirve `https://`/`wss://` en vez de texto plano. **Preparado
+  pero apagado por default** — ver `backend/certs/README.md` antes de tocar
+  esto, activarlo a lo loco corta el acceso de la app.
 
 ## Correr
 
@@ -171,3 +174,16 @@ las tool calls automáticamente contra el registry.
   Cualquier comando/lanzamiento que no matchee esos patrones se ejecuta igual
   sin restricciones; un atacante (o el propio modelo, por error) puede lograr
   el mismo resultado destructivo por una ruta que el blocklist no cubra.
+- **La conexión celular↔PC viaja en texto plano (`ws://`, no `wss://`) — TLS
+  está preparado pero apagado (`TLS_ENABLED=false` default).** Ver
+  `backend/certs/README.md`: hay un certificado self-signed listo para generar
+  (`generate_cert.sh`) y soporte en `run.py`/`config.py` para servir HTTPS/WSS,
+  pero activarlo corta la conexión actual de la app hasta actualizar su URL
+  guardada Y hasta que Android confíe en el certificado (necesita un Network
+  Security Config en la app, no es automático) — por diseño, no se activa sin
+  coordinar el corte con el usuario presente. Mientras tanto, la ruta directa
+  por LAN (sin pasar por Tailscale) es la que más expone esto: cualquier otro
+  dispositivo en esa misma red Wi-Fi podría en teoría capturar el tráfico,
+  incluida la API key en cada request. La ruta por Tailscale ya viaja cifrada
+  por WireGuard a nivel de transporte, así que el riesgo real de esto es mucho
+  menor mientras el celular y la PC no compartan la misma LAN.

@@ -46,6 +46,17 @@ class Settings:
     # como flag real para poder apagarlo sin tocar código.
     phone_shell_enabled: bool = _bool(os.getenv("PHONE_SHELL_ENABLED"), True)
 
+    # TLS para servir wss:// en vez de ws:// (la conexión hoy viaja en texto
+    # plano — ver sección de seguridad de README.md). Preparado pero apagado
+    # por default a propósito: activarlo cambia la URL que espera la app del
+    # celular (https:// en vez de http://) y requiere que Android confíe en el
+    # certificado self-signed (ver `certs/README.md`) — un corte que hay que
+    # coordinar con el usuario presente, no activar solo. Generar el cert con
+    # `certs/generate_cert.sh` (o el comando equivalente documentado ahí).
+    tls_enabled: bool = _bool(os.getenv("TLS_ENABLED"), False)
+    tls_cert_path: str = os.getenv("TLS_CERT_PATH", str(Path(__file__).resolve().parent.parent / "certs" / "cert.pem"))
+    tls_key_path: str = os.getenv("TLS_KEY_PATH", str(Path(__file__).resolve().parent.parent / "certs" / "key.pem"))
+
 
 settings = Settings()
 
