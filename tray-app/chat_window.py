@@ -21,6 +21,8 @@ import config
 _lock = threading.Lock()
 _active_root: tk.Tk | None = None
 
+PHONE_STATUS_POLL_SECONDS = 5
+
 
 def open_chat_window(icon=None, item=None) -> None:
     """Abre la ventana de chat, o trae al frente la que ya está abierta."""
@@ -48,8 +50,13 @@ def _run_window() -> None:
 
     conversation_id: list[str | None] = [None]
 
+    phone_status_label = tk.Label(
+        root, text="Celular: consultando...", fg="gray", anchor="w"
+    )
+    phone_status_label.pack(fill="x", padx=8, pady=(8, 0))
+
     history = scrolledtext.ScrolledText(root, wrap="word", state="disabled")
-    history.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+    history.pack(fill="both", expand=True, padx=8, pady=(4, 4))
 
     entry_frame = tk.Frame(root)
     entry_frame.pack(fill="x", padx=8, pady=(0, 8))
@@ -106,8 +113,32 @@ def _run_window() -> None:
     send_button.configure(command=_send)
     entry.bind("<Return>", _send)
 
+    stop_polling = threading.Event()
+
+    def _set_phone_status(connected: bool | None) -> None:
+        if connected is True:
+            phone_status_label.configure(text="Celular: conectado", fg="#1a7f37")
+        elif connected is False:
+            phone_status_label.configure(text="Celular: desconectado", fg="#b91c1c")
+        else:
+            phone_status_label.configure(text="Celular: sin datos (backend no responde)", fg="gray")
+
+    def _poll_phone_status() -> None:
+        while not stop_polling.is_set():
+            try:
+                resp = requests.get(config.HEALTH_URL, timeout=5)
+                resp.raise_for_status()
+                connected = bool(resp.json().get("phone_connected"))
+                root.after(0, _set_phone_status, connected)
+            except requests.RequestException:
+                root.after(0, _set_phone_status, None)
+            stop_polling.wait(PHONE_STATUS_POLL_SECONDS)
+
+    threading.Thread(target=_poll_phone_status, daemon=True).start()
+
     def _on_close() -> None:
         global _active_root
+        stop_polling.set()
         with _lock:
             _active_root = None
         root.destroy()
