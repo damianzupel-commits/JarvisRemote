@@ -89,4 +89,5 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 # Importar los módulos de tools para que se registren solos.
 from . import filesystem  # noqa: E402,F401
 from . import browser  # noqa: E402,F401
+from . import desktop  # noqa: E402,F401
 from . import phone  # noqa: E402,F401

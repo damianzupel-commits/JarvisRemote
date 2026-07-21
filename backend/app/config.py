@@ -28,6 +28,12 @@ class Settings:
 
     browser_headless: bool = _bool(os.getenv("BROWSER_HEADLESS"), False)
 
+    # Control de escritorio (mouse/teclado/ventanas de cualquier app, ver
+    # app/tools/desktop.py) es tan invasivo como el Accessibility Service del
+    # celular. Prendido por default porque el usuario pidió explícitamente la
+    # versión sin fricción, pero queda como flag real para poder apagarlo.
+    desktop_control_enabled: bool = _bool(os.getenv("DESKTOP_CONTROL_ENABLED"), True)
+
     max_agent_iterations: int = int(os.getenv("MAX_AGENT_ITERATIONS", "10"))
 
     phone_tool_timeout: float = float(os.getenv("PHONE_TOOL_TIMEOUT", "30"))

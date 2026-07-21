@@ -23,6 +23,9 @@ Editá `.env`:
   Server qué puerto y nombre de modelo está usando.
 - `FS_ALLOWED_ROOT`: carpeta raíz a la que quedan limitadas las tools de
   filesystem.
+- `DESKTOP_CONTROL_ENABLED`: prende/apaga las tools `desktop_*` (control de
+  mouse/teclado/ventanas de la PC, ver sección de seguridad más abajo).
+  Default `true`.
 
 ## Correr
 
@@ -68,6 +71,19 @@ pytest
 - `app/tools/browser.py` — `browser_open`, `browser_click`, `browser_type`,
   `browser_get_text`, `browser_screenshot`, `browser_close`, con Playwright
   (Chromium, una sola página persistente entre llamadas).
+- `app/tools/desktop.py` — `desktop_screenshot`, `desktop_list_windows`,
+  `desktop_focus_window`, `desktop_click`, `desktop_click_element`,
+  `desktop_type_text`, `desktop_press_key`, `desktop_move_mouse`,
+  `desktop_scroll`, `desktop_launch_app`. Control general del escritorio
+  (cualquier ventana/app), vía `pywinauto` (UI Automation) + `pyautogui`
+  (coordenadas). `desktop_launch_app` (vía `os.startfile`, con fallback a
+  `cmd /c start`) es la única forma soportada de abrir programas — probado en
+  vivo que simular Win+buscar+escribir+enter con las otras tools es frágil y
+  no abre la app de forma confiable. `desktop_focus_window`/
+  `desktop_click_element` devuelven el proceso dueño de la ventana matcheada
+  (el matching es por substring del título, así que puede haber falsos
+  positivos). Ver sección de seguridad más abajo — es tan invasivo como el
+  Accessibility Service del celular.
 - `app/main.py` — endpoints `GET /api/health` y `POST /api/chat`.
 
 ## Agregar una tool nueva
@@ -88,3 +104,22 @@ las tool calls automáticamente contra el registry.
 - El modelo necesita soportar tool/function calling en el formato de LM Studio
   para que el loop de tools funcione (la mayoría de los modelos instruct
   modernos —Qwen2.5-Instruct, Llama-3.1-Instruct, Hermes, etc.— lo soportan).
+- **Las tools `desktop_*` (`app/tools/desktop.py`) son control total e
+  invasivo del escritorio de Windows**: el modelo puede ver la pantalla
+  (`desktop_screenshot`), listar y enfocar cualquier ventana, mover el mouse,
+  clickear (por coordenadas o por control de UI Automation), escribir texto y
+  mandar combinaciones de teclas en CUALQUIER programa abierto — incluyendo
+  banca online, gestores de contraseñas, apps de 2FA, email, lo que esté en
+  pantalla en ese momento. No hay sandboxing posible para esto (a diferencia
+  de filesystem): es equivalente en alcance al Accessibility Service del
+  celular. Es una decisión consciente del usuario, prendida por default
+  (`DESKTOP_CONTROL_ENABLED=true`); poner `DESKTOP_CONTROL_ENABLED=false` en
+  `.env` para desactivar todas las tools de escritorio sin tocar código.
+  Cada acción de escritorio se loguea (nombre, argumentos, timestamp) al
+  logger `jarvis.desktop` como rastro de auditoría.
+- Las tools de escritorio no pueden controlar ventanas elevadas (UAC,
+  "Ejecutar como administrador", instaladores, Task Manager elevado) —
+  restricción de Windows (UIPI), no un bug. Cuando se detecta ese caso se
+  devuelve `ElevatedWindowError` con un mensaje claro, pero no siempre es
+  detectable: `pyautogui` puede mandar clicks/teclas "al vacío" sin tirar
+  ningún error si el foco está en una ventana elevada.

@@ -2,7 +2,8 @@
 
 Controlá tu LLM local ("Jarvis", servido con LM Studio) desde el celular, desde
 cualquier lugar, con capacidad de ejecutar acciones reales en tu PC
-(sistema de archivos, control del navegador, y lo que se agregue después).
+(sistema de archivos, control del navegador, control invasivo del escritorio
+completo, y lo que se agregue después).
 
 ## Arquitectura
 
@@ -12,7 +13,8 @@ Celular (Android) ──Tailscale VPN──▶ PC Windows
     │ WebSocket saliente               ├─ backend (FastAPI, Python)
     │ (/ws/phone, foreground service)  │    ├─ habla con LM Studio (localhost:1234, OpenAI-compatible)
     └──────────────────────────────────▶    └─ expone tools que el LLM puede invocar, ruteadas por
-                                       │         `target: pc|phone` (filesystem, browser en PC;
+                                       │         `target: pc|phone` (filesystem, browser y control
+                                       │         invasivo de escritorio —mouse/teclado/ventanas— en PC;
                                        │         filesystem SAF + Accessibility Service en el celular)
                                        │
                                        └─ tray-app (Python + pystray)
@@ -84,7 +86,15 @@ python run.py
 5. ✅ App Android: control total del celular — foreground service con WebSocket saliente,
    Accessibility Service (tap/swipe/type/read/global-action), filesystem vía SAF
    (`android-app/.../phone/`). Falta compilar y probar en un dispositivo real.
-6. ⬜ Más tools de PC (procesos, shell, notificaciones, etc.) una vez que el loop básico esté probado
+6. ✅ Control invasivo de escritorio en la PC (paridad con el celular): `app/tools/desktop.py`
+   (screenshot, listar/enfocar ventanas, click por coordenadas o por control de UI Automation,
+   escribir texto, teclas/combos, mover mouse, scroll), vía `pywinauto` + `pyautogui`. Flag
+   `DESKTOP_CONTROL_ENABLED` (default `true`) y log de auditoría (`jarvis.desktop`) — ver
+   `backend/README.md`. Pendiente: no se pudo validar clicks/teclas reales contra una sesión
+   gráfica de Windows real desde esta sesión de desarrollo (solo tests con pyautogui/pywinauto
+   mockeados); probar a mano antes de confiar en el control fino de ventanas elevadas o de
+   `desktop_click_element` contra apps reales.
+   ⬜ Más tools de PC (procesos, shell, notificaciones, etc.) una vez que esto esté probado a mano
 7. 🔶 Hotspot WiFi local como alternativa a Tailscale cuando el celular y la PC están en la
    misma habitación (sin depender de router externo ni de internet).
    - ✅ Backend: como ya escucha en `0.0.0.0` (default de `HOST`), acepta conexiones por
