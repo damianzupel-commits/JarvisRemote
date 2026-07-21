@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.jarvisremote.app.MainActivity
+import com.jarvisremote.app.data.BackendUrlResolver
 import com.jarvisremote.app.data.SettingsRepository
 import kotlin.coroutines.resume
 import kotlin.math.min
@@ -108,7 +109,12 @@ class PhoneLinkService : Service() {
                 continue
             }
 
-            val wsUrl = toWebSocketUrl(settings.backendUrl) + "/ws/phone"
+            val resolvedUrl = BackendUrlResolver.resolve(
+                backendUrl = settings.backendUrl,
+                lastKnownDirectUrl = settings.lastKnownDirectUrl,
+                onDirectUrlDiscovered = { settingsRepository.saveLastKnownDirectUrl(it) },
+            )
+            val wsUrl = toWebSocketUrl(resolvedUrl) + "/ws/phone"
             _status.value = ConnectionStatus.CONNECTING
             updateNotification(ConnectionStatus.CONNECTING)
 

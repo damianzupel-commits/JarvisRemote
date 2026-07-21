@@ -122,10 +122,19 @@ python run.py
    - ⬜ PC: crear el hotspot en sí con `netsh wlan set hostednetwork` o la API moderna
      "Mobile Hotspot" de Windows (`Windows.Networking.NetworkOperators` vía WinRT), con
      SSID/password fijos.
-   - ⬜ App Android: hoy solo guarda una única `backendUrl` (ver
-     `SettingsRepository.kt`) y no consume `network_candidates` todavía. Falta: guardar la
-     última URL directa (`hotspot`/`lan`) vista en `network_candidates`, y al conectar
-     (REST en `ApiClientProvider`/`ChatRepository`, WS en `PhoneLinkService`) probarla
-     primero con timeout corto antes de caer a la `backendUrl` (Tailscale) guardada —
-     mismo Bearer token para ambas, no hace falta que el backend distinga el origen.
-   - No es prioridad inmediata: el foco actual es terminar de compilar el APK.
+   - ✅ App Android: `BackendUrlResolver.kt` (`android-app/.../data/`) consume
+     `network_candidates` de `/api/health` — antes de cada conexión (REST en
+     `ChatRepository`, WS en `PhoneLinkService`) prueba primero el último candidato
+     directo (`hotspot`/`lan`) cacheado en `SettingsRepository` (timeout corto, 3s), y
+     cae a la `backendUrl` configurada (Tailscale) si no responde. Cualquiera de las dos
+     que responda se usa para refrescar el candidato directo cacheado, así la próxima
+     vez que el celular esté en la misma red que la PC ya prueba la ruta corta sin
+     intervención manual. `/api/health` no requiere auth, así que el probe no necesita
+     el API key. Validado en vivo de punta a punta: conectado por LAN cuando ambos
+     dispositivos comparten WiFi, y reconectado automáticamente por Tailscale
+     (confirmado con `netstat`, conexión ESTABLISHED entre las IPs `100.x.x.x` de
+     ambos) al apagar el WiFi del celular y quedar solo con datos móviles. Tests JVM
+     puros (JUnit + MockWebServer, sin Robolectric) en
+     `android-app/app/src/test/.../BackendUrlResolverTest.kt`.
+   - No es prioridad inmediata crear el hotspot en sí (el punto anterior): el foco
+     era la parte de Android, ya resuelta.

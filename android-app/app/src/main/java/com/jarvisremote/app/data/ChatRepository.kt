@@ -11,7 +11,12 @@ class ChatRepository(private val settingsRepository: SettingsRepository) {
         }
         return try {
             val conversationId = settingsRepository.ensureConversationId()
-            val api = ApiClientProvider.getApi(settings.backendUrl, settings.apiKey)
+            val resolvedUrl = BackendUrlResolver.resolve(
+                backendUrl = settings.backendUrl,
+                lastKnownDirectUrl = settings.lastKnownDirectUrl,
+                onDirectUrlDiscovered = { settingsRepository.saveLastKnownDirectUrl(it) },
+            )
+            val api = ApiClientProvider.getApi(resolvedUrl, settings.apiKey)
             val response = api.chat(ChatRequest(message = text, conversationId = conversationId))
             Result.success(response)
         } catch (e: Exception) {

@@ -25,6 +25,15 @@ data class ToolCallLog(
 )
 
 @Serializable
+data class NetworkCandidate(
+    val ip: String,
+    val type: String,
+    val url: String,
+)
+
+@Serializable
 data class HealthResponse(
     val status: String,
+    @SerialName("phone_connected") val phoneConnected: Boolean = false,
+    @SerialName("network_candidates") val networkCandidates: List<NetworkCandidate> = emptyList(),
 )

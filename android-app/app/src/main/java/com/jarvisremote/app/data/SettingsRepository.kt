@@ -19,6 +19,12 @@ data class JarvisSettings(
     val phoneFolderUri: String = "",
     /** Si el usuario pidió que el servicio de conexión arranque (y se reinicie tras un reboot). */
     val phoneLinkEnabled: Boolean = false,
+    /**
+     * Último candidato "directo" (hotspot/LAN, no Tailscale) visto en `network_candidates`
+     * de `/api/health` — se prueba primero (con timeout corto) antes de caer a [backendUrl]
+     * en cada intento de conexión. Ver `BackendUrlResolver`.
+     */
+    val lastKnownDirectUrl: String = "",
 )
 
 class SettingsRepository(private val context: Context) {
@@ -28,6 +34,7 @@ class SettingsRepository(private val context: Context) {
         val CONVERSATION_ID = stringPreferencesKey("conversation_id")
         val PHONE_FOLDER_URI = stringPreferencesKey("phone_folder_uri")
         val PHONE_LINK_ENABLED = booleanPreferencesKey("phone_link_enabled")
+        val LAST_KNOWN_DIRECT_URL = stringPreferencesKey("last_known_direct_url")
     }
 
     val settingsFlow: Flow<JarvisSettings> = context.dataStore.data.map { prefs ->
@@ -36,6 +43,7 @@ class SettingsRepository(private val context: Context) {
             apiKey = prefs[Keys.API_KEY] ?: "",
             phoneFolderUri = prefs[Keys.PHONE_FOLDER_URI] ?: "",
             phoneLinkEnabled = prefs[Keys.PHONE_LINK_ENABLED] ?: false,
+            lastKnownDirectUrl = prefs[Keys.LAST_KNOWN_DIRECT_URL] ?: "",
         )
     }
 
@@ -44,6 +52,10 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.BACKEND_URL] = url.trim().trimEnd('/')
             prefs[Keys.API_KEY] = apiKey.trim()
         }
+    }
+
+    suspend fun saveLastKnownDirectUrl(url: String) {
+        context.dataStore.edit { it[Keys.LAST_KNOWN_DIRECT_URL] = url.trim().trimEnd('/') }
     }
 
     /** conversation_id estable por instalación, para que el backend mantenga el historial. */
