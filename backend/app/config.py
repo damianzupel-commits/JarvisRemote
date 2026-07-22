@@ -55,6 +55,13 @@ class Settings:
     # como flag real para poder apagarlo sin tocar código.
     phone_shell_enabled: bool = _bool(os.getenv("PHONE_SHELL_ENABLED"), True)
 
+    # Uso de la cámara del celular (ver app/tools/phone.py::phone_take_photo). Captura
+    # silenciosa (sin abrir la app de Cámara), en la misma categoría de invasividad que
+    # el resto de las tools de celular. Prendido por default (mismo criterio que
+    # DESKTOP_CONTROL_ENABLED/PHONE_SHELL_ENABLED), pero queda como flag real para
+    # poder apagarlo sin tocar código.
+    phone_camera_enabled: bool = _bool(os.getenv("PHONE_CAMERA_ENABLED"), True)
+
     # TLS para servir wss:// en vez de ws:// (la conexión hoy viaja en texto
     # plano — ver sección de seguridad de README.md). Preparado pero apagado
     # por default a propósito: activarlo cambia la URL que espera la app del

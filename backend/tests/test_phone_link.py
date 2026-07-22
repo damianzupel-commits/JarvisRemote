@@ -246,3 +246,39 @@ async def test_dispatch_allows_legitimate_commands_that_look_similar(command, mo
     await handle_incoming({"id": sent["id"], "result": {"stdout": "", "exit_code": 0}})
     result = await task
     assert result == {"stdout": "", "exit_code": 0}
+
+
+@pytest.mark.anyio
+async def test_dispatch_phone_take_photo_blocked_when_camera_disabled(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_camera_enabled", False)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    with pytest.raises(PermissionError):
+        await dispatch_to_phone("phone_take_photo", {"camera": "back"})
+    # Ni siquiera debería haber intentado mandarlo por WebSocket.
+    assert ws.sent == []
+
+
+@pytest.mark.anyio
+async def test_dispatch_phone_take_photo_allowed_when_camera_enabled(monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "phone_camera_enabled", True)
+    ws = FakeWebSocket()
+    await register_phone(ws)
+
+    task = asyncio.create_task(
+        dispatch_to_phone("phone_take_photo", {"camera": "back"}, timeout=5)
+    )
+    await asyncio.sleep(0.01)
+    assert len(ws.sent) == 1
+    sent = json.loads(ws.sent[0])
+    assert sent["tool"] == "phone_take_photo"
+
+    fake_result = {"image_base64": "ZmFrZQ==", "mime_type": "image/jpeg", "width": 1024, "height": 768}
+    await handle_incoming({"id": sent["id"], "result": fake_result})
+    result = await task
+    assert result == fake_result

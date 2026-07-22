@@ -16,6 +16,17 @@
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
     <!--
+    Permiso "dangerous" para que Jarvis pueda tomar fotos en silencio con la cámara
+    del celular (phone_take_photo, ver phone/PhoneCamera.kt). Se pide en runtime
+    desde Ajustes, igual que el permiso de Termux. `required="false"` en la feature
+    para que la app siga instalable en un dispositivo sin cámara (poco probable acá,
+    pero es la práctica correcta).
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.front" android:required="false" />
+
+    <!--
     Necesario para que PackageManager.getLaunchIntentForPackage funcione con
     cualquier app instalada (phone_open_app): a partir de Android 11, un paquete
     solo es "visible" para otro si hay una declaración <queries> que lo cubra.

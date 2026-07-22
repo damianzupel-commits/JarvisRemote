@@ -20,8 +20,13 @@ SYSTEM_PROMPT = (
     "mouse, teclado, ventanas de cualquier programa abierto: screenshot, listar/enfocar "
     "ventanas, click por coordenadas o por control, escribir texto, combinaciones de teclas, "
     "mover mouse, scroll), y —si hay un celular conectado— abrir apps, leer/escribir archivos, "
-    "controlar la pantalla (tocar, deslizar, escribir, leer contenido), y ejecutar comandos de shell "
-    "reales (vía Termux) en el celular. phone_run_command es para lo que necesite un intérprete o "
+    "controlar la pantalla (tocar, deslizar, escribir, leer contenido), tomar fotos con la cámara "
+    "(phone_take_photo) para 'ver' el entorno, y ejecutar comandos de shell reales (vía Termux) en "
+    "el celular. phone_take_photo solo sirve para describir/identificar lo que ve si el modelo "
+    "cargado ahora mismo en LM Studio es un modelo de visión (VL) — con un modelo de solo texto la "
+    "foto se saca igual pero vas a recibir un aviso de que no podés verla; en ese caso decíselo al "
+    "usuario tal cual (que cambie a un modelo VL en LM Studio), no inventes una descripción de la "
+    "imagen. phone_run_command es para lo que necesite un intérprete o "
     "herramientas de línea de comandos de verdad (scripts, python, git, etc.) — no la uses para "
     "interactuar con la UI de apps, para eso están phone_tap/phone_swipe/phone_type_text/"
     "phone_global_action. phone_run_command depende de que el usuario tenga Termux instalado y "
@@ -75,6 +80,35 @@ def _phone_status_note() -> dict:
 # el proceso (suficiente para v1; si hace falta persistencia se cambia por un store).
 _conversations: dict[str, list[dict]] = {}
 
+# Tools cuyo resultado trae una imagen que hay que mandarle al modelo como contenido
+# multimodal (ver `_build_image_message`), no como el texto plano de un mensaje 'tool'
+# normal.
+_IMAGE_TOOL_NAMES = {"phone_take_photo"}
+
+_VISION_FALLBACK_MSG = (
+    "La foto se sacó bien, pero el modelo que está cargado ahora mismo en LM Studio no puede ver "
+    "imágenes (no es un modelo de visión). Para que Jarvis pueda describir lo que ve la cámara, "
+    "cambiá a un modelo VL en LM Studio (ej. Qwen3-VL-30B-A3B-Instruct) y probá de nuevo."
+)
+
+
+def _build_image_message(result: dict) -> dict:
+    """Arma el mensaje multimodal (formato de contenido de OpenAI) con la imagen que
+    devolvió una tool de `_IMAGE_TOOL_NAMES`. Va como mensaje 'user' aparte (no dentro
+    del mensaje 'tool', que se manda como texto plano) — es el formato que entiende
+    LM Studio cuando el modelo cargado es de visión."""
+    mime_type = result.get("mime_type", "image/jpeg")
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "(Foto recién tomada con la cámara del celular, adjunta arriba.)"},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{result['image_base64']}"},
+            },
+        ],
+    }
+
 
 def _trim_history(history: list[dict], max_messages: int) -> None:
     """Recorta `history` in-place si el cuerpo (todo menos el system prompt en
@@ -99,6 +133,11 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
 
     tool_log: list[dict] = []
     tools = openai_tool_schemas()
+    # Si el turno anterior le acaba de mandar una imagen al modelo (ver
+    # `_build_image_message`), la próxima llamada puede fallar con un modelo que no
+    # sea de visión — en ese caso no hay que crashear, hay que avisarle al usuario
+    # que cambie de modelo (ver docstring de `_VISION_FALLBACK_MSG`).
+    awaiting_vision_response = False
 
     for _ in range(settings.max_agent_iterations):
         # Poda también acá adentro (no solo al entrar): un turno con muchas
@@ -110,12 +149,23 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
         # así siempre es el estado real al momento de la llamada, no una foto vieja que
         # se vuelve stale (o contradice lo que el modelo dijo antes) a medida que la
         # conversación crece.
-        response = await client.chat.completions.create(
-            model=settings.lmstudio_model,
-            messages=history + [_phone_status_note()],
-            tools=tools or None,
-            tool_choice="auto" if tools else None,
-        )
+        try:
+            response = await client.chat.completions.create(
+                model=settings.lmstudio_model,
+                messages=history + [_phone_status_note()],
+                tools=tools or None,
+                tool_choice="auto" if tools else None,
+            )
+        except Exception as exc:
+            if awaiting_vision_response:
+                logger.warning(
+                    "LLM call tras phone_take_photo falló (probablemente el modelo cargado no es VL): %s",
+                    exc,
+                )
+                history.append({"role": "assistant", "content": _VISION_FALLBACK_MSG})
+                return conv_id, _VISION_FALLBACK_MSG, tool_log
+            raise
+        awaiting_vision_response = False
         choice = response.choices[0]
         msg = choice.message
 
@@ -139,13 +189,31 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                     logger.warning("tool_call failed name=%s error=%s", tc.function.name, exc)
                     result = {"error": str(exc)}
                 tool_log.append({"tool": tc.function.name, "arguments": args, "result": result})
-                history.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.id,
-                        "content": json.dumps(result, default=str, ensure_ascii=False),
-                    }
-                )
+
+                if tc.function.name in _IMAGE_TOOL_NAMES and "image_base64" in result:
+                    # El mensaje 'tool' no lleva el base64 crudo: mandarle un blob de
+                    # decenas de KB como texto a un modelo que puede ni ser VL infla el
+                    # historial (y el contexto) para nada — la imagen de verdad va
+                    # aparte, como mensaje multimodal, en el formato que entiende un VL.
+                    tool_summary = {k: v for k, v in result.items() if k != "image_base64"}
+                    tool_summary["note"] = "imagen adjunta en el siguiente mensaje"
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": json.dumps(tool_summary, default=str, ensure_ascii=False),
+                        }
+                    )
+                    history.append(_build_image_message(result))
+                    awaiting_vision_response = True
+                else:
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": json.dumps(result, default=str, ensure_ascii=False),
+                        }
+                    )
             continue
 
         history.append({"role": "assistant", "content": msg.content})

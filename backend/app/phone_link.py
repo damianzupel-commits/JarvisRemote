@@ -47,6 +47,10 @@ _pending: dict[str, asyncio.Future] = {}
 # flag (PHONE_SHELL_ENABLED) y se loguean como rastro de auditoría.
 _SHELL_TOOL_NAMES = {"phone_run_command"}
 
+# Tools que usan la cámara del celular — se gatean con su propio flag
+# (PHONE_CAMERA_ENABLED), mismo criterio que las tools de shell/escritorio.
+_CAMERA_TOOL_NAMES = {"phone_take_photo"}
+
 # Blocklist de patrones obviamente destructivos para phone_run_command. Esto es
 # una mitigación de "evitar el desastre obvio" por matching de texto — NO es un
 # sandbox real ni una garantía de seguridad completa. Cualquier comando que no
@@ -133,6 +137,13 @@ async def dispatch_to_phone(tool_name: str, arguments: dict[str, Any], timeout: 
                 audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=str(exc))
                 raise
         logger.info("phone_shell: tool=%s arguments=%s", tool_name, arguments)
+
+    if tool_name in _CAMERA_TOOL_NAMES:
+        if not settings.phone_camera_enabled:
+            error = "Uso de la cámara del celular deshabilitado. Setear PHONE_CAMERA_ENABLED=true en backend/.env para habilitarlo."
+            audit_log.log_tool_call(target="phone", tool=tool_name, arguments=arguments, error=error)
+            raise PermissionError(error)
+        logger.info("phone_camera: tool=%s arguments=%s", tool_name, arguments)
 
     timeout = timeout if timeout is not None else settings.phone_tool_timeout
     if _phone_ws is None:

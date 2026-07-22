@@ -72,6 +72,12 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
     var accessibilityEnabled by remember { mutableStateOf(AccessibilityUtils.isEnabled(context)) }
     var termuxInstalled by remember { mutableStateOf(TermuxCommandRunner.isTermuxInstalled(context)) }
     var termuxPermissionGranted by remember { mutableStateOf(TermuxCommandRunner.hasPermission(context)) }
+    var cameraPermissionGranted by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -79,6 +85,10 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
                 accessibilityEnabled = AccessibilityUtils.isEnabled(context)
                 termuxInstalled = TermuxCommandRunner.isTermuxInstalled(context)
                 termuxPermissionGranted = TermuxCommandRunner.hasPermission(context)
+                cameraPermissionGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.CAMERA,
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -87,6 +97,9 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
     val termuxPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> termuxPermissionGranted = granted }
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> cameraPermissionGranted = granted }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -247,6 +260,27 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
                 enabled = termuxInstalled && !termuxPermissionGranted,
             ) {
                 Text("Habilitar ejecución de comandos")
+            }
+
+            HorizontalDivider()
+            Text("Cámara", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Le da a Jarvis la posibilidad de tomar fotos en silencio con la cámara del celular " +
+                    "(sin abrir la app de Cámara) para que pueda 'ver' el entorno. Solo puede describir " +
+                    "lo que ve si en LM Studio está cargado un modelo de visión (VL) — con un modelo de " +
+                    "solo texto la foto se toma igual pero Jarvis avisa que no puede verla.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Cámara: " + if (cameraPermissionGranted) "otorgado" else "no otorgado",
+                color = if (cameraPermissionGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(
+                onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                enabled = !cameraPermissionGranted,
+            ) {
+                Text("Habilitar cámara")
             }
 
             Row(

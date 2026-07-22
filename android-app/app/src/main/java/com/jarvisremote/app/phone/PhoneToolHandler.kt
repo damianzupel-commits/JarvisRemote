@@ -101,6 +101,10 @@ object PhoneToolHandler {
                 arguments.optInt("timeout", 30) * 1000L,
             )
 
+            "phone_take_photo" -> PhoneCameraProvider.instance
+                .takePhoto(context, isFrontCameraRequested(arguments))
+                .toJson()
+
             else -> throw IllegalArgumentException("Tool de celular desconocida: '$tool'")
         }
     }

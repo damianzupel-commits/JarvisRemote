@@ -16,6 +16,11 @@ Equivalentes en el celular a las tools de PC (filesystem, browser/pantalla):
 - `phone_run_command`: ejecución de shell REAL en el celular vía Termux (Intent
   RUN_COMMAND) — código arbitrario, no solo interacción con la UI. El nivel más
   invasivo posible del lado del celular; gateado por `PHONE_SHELL_ENABLED`.
+- `phone_take_photo`: captura silenciosa (sin abrir la app de Cámara) con la cámara
+  del celular vía CameraX, para que Jarvis pueda "ver" el entorno. Gateado por
+  `PHONE_CAMERA_ENABLED`. Solo describe lo que ve si el modelo cargado en LM Studio
+  en ese momento es de visión (VL) — `agent.py` maneja con gracia el caso contrario
+  (ver su docstring).
   Todas las tools de celular (no solo esta) quedan registradas en el log de
   auditoría estructurado (`app/audit_log.py`, JSON por línea en
   `backend/audit.log`) desde `phone_link.dispatch_to_phone`. Requiere pasos
@@ -252,3 +257,38 @@ def phone_global_action(action: str) -> dict:
 )
 def phone_run_command(command: str, timeout: int = 30) -> dict:
     _not_routed("phone_run_command")
+
+
+@register_tool(
+    name="phone_take_photo",
+    description=(
+        "Toma una foto en silencio con la cámara del celular (sin abrir la app de Cámara ni esperar "
+        "que el usuario apriete el obturador) y la devuelve para que el modelo la vea. Usar esto "
+        "cuando el usuario pida que Jarvis 'mire'/'vea' algo con la cámara del celular, identifique "
+        "un objeto, o describa lo que tiene enfrente. Requiere que el usuario haya otorgado el "
+        "permiso de cámara a la app (si no, la tool falla con un mensaje explicando que hay que "
+        "otorgarlo desde Ajustes); si falta, avisale eso al usuario en vez de asumir que la foto se "
+        "sacó. IMPORTANTE: esto solo funciona para que puedas describir/identificar lo que ves si el "
+        "modelo cargado en LM Studio en este momento es un modelo de visión (VL, ej. "
+        "Qwen3-VL-30B-A3B-Instruct) — con un modelo de solo texto (como el default actual) la foto "
+        "se captura igual pero no vas a poder verla; en ese caso avisale al usuario que hace falta "
+        "cambiar a un modelo de visión en LM Studio, no inventes una descripción."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "camera": {
+                "type": "string",
+                "enum": ["back", "front"],
+                "description": (
+                    "Qué cámara usar (default 'back', la trasera — la más útil para mirar el "
+                    "entorno; 'front' solo si el usuario pide explícitamente la cámara delantera)."
+                ),
+            }
+        },
+        "required": [],
+    },
+    target="phone",
+)
+def phone_take_photo(camera: str = "back") -> dict:
+    _not_routed("phone_take_photo")
