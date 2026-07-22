@@ -36,8 +36,12 @@ object ApiClientProvider {
         val client = OkHttpClient.Builder()
             .addInterceptor(authInterceptor)
             .connectTimeout(15, TimeUnit.SECONDS)
-            // El modelo local (30B) + el loop de tools puede tardar bastante en responder.
-            .readTimeout(180, TimeUnit.SECONDS)
+            // Un turno de chat puede encadenar varias tool calls, cada una con su propia
+            // inferencia del modelo local (30B) — visto en vivo un turno real de más de 4
+            // minutos (phone_read_screen + phone_open_app + phone_list_dir + phone_read_file)
+            // que el cliente cortaba a los 180s creyendo que el backend no respondía, cuando
+            // en realidad seguía trabajando bien de fondo. 30 minutos da margen real.
+            .readTimeout(30, TimeUnit.MINUTES)
             .writeTimeout(30, TimeUnit.SECONDS)
             .build()
 
