@@ -1,140 +1,126 @@
 # JarvisRemote
 
-Controlá tu LLM local ("Jarvis", servido con LM Studio) desde el celular, desde
-cualquier lugar, con capacidad de ejecutar acciones reales en tu PC
-(sistema de archivos, control del navegador, control invasivo del escritorio
-completo, y lo que se agregue después).
+Un asistente de IA **local** (no depende de ningún servicio en la nube — corre
+enteramente en tu propia PC vía [LM Studio](https://lmstudio.ai)) al que le podés
+dar órdenes desde tu celular o desde tu PC, y que puede **ejecutar acciones
+reales** en ambos dispositivos: no solo chatea, controla.
+
+> ⚠️ **Antes de instalar esto, leé la sección [Advertencias de
+> seguridad](#️-advertencias-de-seguridad).** Este proyecto le da a un LLM
+> control real y muy invasivo de tu PC y tu celular. No es un juguete — hay
+> que entender el riesgo antes de prenderlo.
+
+## Qué puede hacer
+
+- **Control total de tu PC**: sistema de archivos (sandboxeado a una carpeta),
+  control de navegador (Playwright), y control invasivo de escritorio completo
+  — mouse, teclado, ventanas de cualquier programa abierto, lanzar
+  aplicaciones.
+- **Control total de tu Android** vía su Accessibility Service: tocar,
+  deslizar, escribir y leer el contenido de **cualquier app en pantalla**
+  (incluidas apps de banco o 2FA — el riesgo es real y hay que asumirlo
+  explícitamente, ver más abajo).
+- **Ejecución de shell real** en el celular (comandos arbitrarios, no solo UI)
+  delegando en [Termux](https://termux.dev), vía su Intent `RUN_COMMAND`.
+- **Visión**: puede sacar una foto o grabar un clip corto con la cámara del
+  celular en silencio (sin abrir la app de Cámara) para "ver" el entorno —
+  funciona con cualquier modelo de visión (VL) cargado en LM Studio (ej.
+  Qwen3-VL). El video nunca se manda crudo al modelo: se extraen frames y se
+  mandan como una secuencia de imágenes, el formato que sí soportan de forma
+  confiable los modelos VL.
+- **Acceso remoto de verdad, "desde cualquier lugar"**, sin exponer nada a
+  internet: la conexión celular↔PC viaja por [Tailscale](https://tailscale.com)
+  (VPN mesh privada), con failover automático a la red local (WiFi/hotspot)
+  cuando ambos dispositivos están cerca, para menor latencia.
+- **Roadmap**: integración con [Home Assistant](https://www.home-assistant.io)
+  como hub central para que Jarvis controle dispositivos smart-home,
+  impresión 3D, y builds propios (ESP32/Arduino) vía ESPHome — ver el informe
+  completo para el detalle.
 
 ## Arquitectura
 
-```
-Celular (Android) ──Tailscale VPN──▶ PC Windows
-    │                                  │
-    │ WebSocket saliente               ├─ backend (FastAPI, Python)
-    │ (/ws/phone, foreground service)  │    ├─ habla con LM Studio (localhost:1234, OpenAI-compatible)
-    └──────────────────────────────────▶    └─ expone tools que el LLM puede invocar, ruteadas por
-                                       │         `target: pc|phone` (filesystem, browser y control
-                                       │         invasivo de escritorio —mouse/teclado/ventanas— en PC;
-                                       │         filesystem SAF + Accessibility Service + shell real
-                                       │         vía Termux en el celular)
-                                       │
-                                       └─ tray-app (Python + pystray)
-                                            corre/administra el backend y muestra estado
-```
+![Arquitectura de JarvisRemote](docs/arquitectura_jarvisremote.png)
 
-Además de `POST /api/chat` (celular → backend), el backend expone `/ws/phone`: una
-conexión WebSocket **saliente desde el celular** (mantenida por un foreground service
-en la app Android), autenticada con el mismo Bearer token. Mientras esté conectado, el
-LLM puede invocar tools con `target="phone"` (`phone_open_app`, `phone_list_dir`,
-`phone_read_file`, `phone_write_file`, `phone_tap`, `phone_swipe`, `phone_type_text`,
-`phone_read_screen`, `phone_global_action`, `phone_run_command`) que se despachan al
-celular y esperan la respuesta correlacionada por id (ver `backend/app/phone_link.py` y
-`backend/app/tools/phone.py`). El control de pantalla usa el Accessibility Service de
-Android (control total, riesgo asumido explícitamente); el filesystem del celular está
-sandboxeado a una carpeta elegida una vez vía Storage Access Framework (mismo modelo
-que `FS_ALLOWED_ROOT` para la PC); `phone_run_command` ejecuta shell real dentro de
-Termux vía su Intent RUN_COMMAND — el nivel más invasivo posible, código arbitrario en
-vez de solo UI, y requiere pasos manuales de setup (ver `android-app/README.md`).
+Tres componentes:
 
-No hay ningún puerto expuesto a internet. El backend escucha en la IP privada que te da
-Tailscale (`100.x.x.x`), y solo dispositivos dentro de tu tailnet (tu PC y tu celular)
-pueden llegar a él. Además todas las requests requieren un Bearer token (API key).
+- **`backend/`** — Python + FastAPI. Habla con LM Studio (API compatible con
+  OpenAI), corre el loop del agente (tool calling), y expone `POST /api/chat`
+  y `WS /ws/phone` — ambos autenticados con un Bearer token.
+- **`tray-app/`** — Python + pystray. Administra el backend como subproceso
+  (arrancar/parar/reiniciar si se cae) y tiene su propia ventana de chat.
+- **`android-app/`** — Kotlin + Jetpack Compose. Chat contra el backend, más un
+  foreground service que mantiene una conexión WebSocket saliente hacia
+  `/ws/phone` para recibir y ejecutar tool calls en el celular.
 
-## Repo
+No hay ningún puerto expuesto a internet: el backend escucha en tu IP privada
+de Tailscale (o en la LAN local), y todas las requests requieren el Bearer
+token. Ver el diagrama y el [informe completo](INFORME_COMPLETO.md) para el
+detalle de cada pieza.
 
-- **`backend/`** — servicio Python/FastAPI. Conecta con LM Studio, corre el loop del
-  agente (tool calling), expone `POST /api/chat` autenticado. **Ya scaffoldeado, ver
-  `backend/README.md`.**
-- **`tray-app/`** — tray app de Windows (Python + pystray) que arranca/para el backend
-  como subproceso y muestra su estado (corriendo / iniciando / caído). **Ya
-  scaffoldeado, ver `tray-app/README.md`.**
-- **`android-app/`** — app nativa Android (Kotlin + Jetpack Compose) que le pega al
-  backend vía Tailscale: mandás un mensaje/orden, ves la respuesta y el log de tools
-  ejecutadas. **Scaffoldeada pero no compilada en esta máquina** (no hay Android SDK
-  instalado acá) — ver `android-app/README.md` para abrirla en Android Studio.
+## Instalación rápida
 
-## Decisiones técnicas (ya tomadas)
-
-| Pieza | Elección | Por qué |
-|---|---|---|
-| Modelo | 30B vía LM Studio, API OpenAI-compatible en `localhost:1234` | Ya definido por vos |
-| Backend | Python + FastAPI | Ecosistema estándar para agentes LLM, Playwright para browser, mismo lenguaje que el tray |
-| Tool calling | Formato "tools" de OpenAI (function calling) contra LM Studio | LM Studio expone ese mismo formato; requiere un modelo con soporte de tool calling |
-| Auth | Bearer token estático (API key) por header `Authorization` | Simple, suficiente detrás de Tailscale |
-| Acceso remoto | Tailscale (VPN mesh privada), backend bindeado a la IP de Tailscale | Pedido explícito: evitar exponer nada a internet |
-| Conexión local | Hotspot WiFi de la PC (sin router ni internet) como alternativa a Tailscale cuando están en la misma habitación — ver Roadmap | Evitar depender de Tailscale/internet cuando el celular está al lado de la PC |
-| Tray app | Python + pystray | Mismo lenguaje que el backend, liviano, sin necesidad de Electron/.NET |
-| App Android | Kotlin + Jetpack Compose, Retrofit/OkHttp | Stack nativo estándar actual para Android |
-
-## Quickstart (backend)
-
-Ver `backend/README.md` para el detalle. Resumen:
+Guía resumida — para el detalle completo (Termux, Tailscale, compilar la app
+Android sin Android Studio, etc.) ver el [informe completo](INFORME_COMPLETO.md)
+y el README de cada componente (`backend/README.md`, `tray-app/README.md`,
+`android-app/README.md`).
 
 ```bash
+# 1. Backend
 cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 playwright install chromium
-copy .env.example .env    # y completar API_KEY, HOST (tu IP de tailscale), etc.
+copy .env.example .env    # completar API_KEY, HOST (tu IP de Tailscale), etc.
 python run.py
+
+# 2. LM Studio: cargar un modelo con soporte de tool calling (y de visión, si
+#    querés que Jarvis "vea") y arrancar su servidor local (puerto 1234 default).
+
+# 3. Tray app (opcional, recomendado): supervisa el backend en vez de correrlo suelto.
+cd tray-app
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python tray.py
+
+# 4. App Android: compilar con Gradle (JDK 17 + Android SDK cmdline-tools,
+#    no hace falta Android Studio completo) e instalar vía ADB. Ver
+#    android-app/README.md para Tailscale, Termux y el Accessibility Service.
 ```
 
-## Roadmap
+## ⚠️ Advertencias de seguridad
 
-1. ✅ Backend: conexión a LM Studio + framework de tools (filesystem, browser)
-2. ✅ Tray app de Windows que administra el backend
-3. ✅ App Android (Kotlin + Compose) — scaffoldeada; falta compilarla en una máquina con Android Studio
-4. ✅ Backend: `/ws/phone` + tools `target="phone"` (routing por campo `target`, ver `backend/app/phone_link.py`)
-5. ✅ App Android: control total del celular — foreground service con WebSocket saliente,
-   Accessibility Service (tap/swipe/type/read/global-action), filesystem vía SAF
-   (`android-app/.../phone/`). Falta compilar y probar en un dispositivo real.
-6. ✅ Control invasivo de escritorio en la PC (paridad con el celular): `app/tools/desktop.py`
-   (screenshot, listar/enfocar ventanas, click por coordenadas o por control de UI Automation,
-   escribir texto, teclas/combos, mover mouse, scroll, `desktop_launch_app`), vía `pywinauto` +
-   `pyautogui`. Flag `DESKTOP_CONTROL_ENABLED` (default `true`) y log de auditoría
-   (`jarvis.desktop`) — ver `backend/README.md`. Validado en vivo contra el agente real corriendo
-   (abrir el Bloc de notas y escribirle texto, de punta a punta) — encontró y arregló 3 bugs reales
-   que los tests mockeados no detectaban: foco no garantizado al lanzar una app (ahora
-   `desktop_launch_app` espera la ventana nueva y fuerza foreground), `SetForegroundWindow` de
-   pywin32 lanzando excepción en vez de fallar en silencio, y matching de ventanas por substring de
-   título ambiguo con varias instancias de la misma app (ahora `desktop_focus_window` acepta `pid`).
-   ⬜ Más tools de PC (procesos, notificaciones, etc.) si hace falta más adelante.
-7. ✅ Ejecución de shell REAL en el celular vía Termux: `phone_run_command`
-   (`backend/app/tools/phone.py`) + `TermuxCommandRunner`/`TermuxResultService`
-   (`android-app/.../phone/`), usando el Intent RUN_COMMAND de Termux. El nivel más invasivo
-   posible del lado del celular — código arbitrario, no solo UI. Flag `PHONE_SHELL_ENABLED`
-   (default `true`) y log de auditoría (`jarvis.phone_link`) — ver `backend/README.md`. Compila
-   limpio (`gradlew.bat assembleDebug` → BUILD SUCCESSFUL) pero **no se pudo validar en vivo**:
-   requiere que el usuario instale Termux desde F-Droid, configure `allow-external-apps=true`, y
-   otorgue el permiso `com.termux.permission.RUN_COMMAND` — los tres son pasos manuales, ver
-   `android-app/README.md` para el detalle y lo específico que falta probar (sobre todo si Termux
-   preserva el extra de correlación al mandar el resultado por PendingIntent).
-8. 🔶 Hotspot WiFi local como alternativa a Tailscale cuando el celular y la PC están en la
-   misma habitación (sin depender de router externo ni de internet).
-   - ✅ Backend: como ya escucha en `0.0.0.0` (default de `HOST`), acepta conexiones por
-     cualquier interfaz simultáneamente — Tailscale y hotspot/LAN a la vez, sin config
-     extra. `GET /api/health` ahora devuelve `network_candidates`: la lista de IPs propias
-     detectadas (`backend/app/network_info.py`), clasificadas como `hotspot`
-     (`192.168.137.0/24`, subnet default de Windows Mobile Hotspot/ICS), `lan` (resto de
-     RFC1918) o `tailscale` (`100.64.0.0/10`), ordenadas conexión directa primero y
-     Tailscale al final como fallback. Las IPs públicas nunca se listan.
-   - ⬜ PC: crear el hotspot en sí con `netsh wlan set hostednetwork` o la API moderna
-     "Mobile Hotspot" de Windows (`Windows.Networking.NetworkOperators` vía WinRT), con
-     SSID/password fijos.
-   - ✅ App Android: `BackendUrlResolver.kt` (`android-app/.../data/`) consume
-     `network_candidates` de `/api/health` — antes de cada conexión (REST en
-     `ChatRepository`, WS en `PhoneLinkService`) prueba primero el último candidato
-     directo (`hotspot`/`lan`) cacheado en `SettingsRepository` (timeout corto, 3s), y
-     cae a la `backendUrl` configurada (Tailscale) si no responde. Cualquiera de las dos
-     que responda se usa para refrescar el candidato directo cacheado, así la próxima
-     vez que el celular esté en la misma red que la PC ya prueba la ruta corta sin
-     intervención manual. `/api/health` no requiere auth, así que el probe no necesita
-     el API key. Validado en vivo de punta a punta: conectado por LAN cuando ambos
-     dispositivos comparten WiFi, y reconectado automáticamente por Tailscale
-     (confirmado con `netstat`, conexión ESTABLISHED entre las IPs `100.x.x.x` de
-     ambos) al apagar el WiFi del celular y quedar solo con datos móviles. Tests JVM
-     puros (JUnit + MockWebServer, sin Robolectric) en
-     `android-app/app/src/test/.../BackendUrlResolverTest.kt`.
-   - No es prioridad inmediata crear el hotspot en sí (el punto anterior): el foco
-     era la parte de Android, ya resuelta.
+Este proyecto le da a un LLM **control real, no simulado**, sobre dos
+dispositivos. Antes de usarlo:
+
+- **El Accessibility Service del celular puede leer y accionar sobre
+  cualquier app en pantalla**, incluidas apps de banco y 2FA. Hay un
+  blocklist configurable de apps sensibles (ver Ajustes de la app), pero es
+  una mitigación por nombre de paquete, **no una garantía completa** — el
+  riesgo de fondo (control total de pantalla) sigue existiendo.
+- **`phone_run_command` ejecuta código arbitrario** en el celular vía Termux.
+  Hay un blocklist de patrones obviamente destructivos (`rm -rf /`, `mkfs`,
+  fork bombs, etc.), pero es matching de texto — **no es un sandbox real**.
+  Cualquier comando que no matchee esos patrones se ejecuta sin restricciones.
+- **El control de escritorio de la PC** (mouse/teclado/ventanas) tiene el
+  mismo nivel de invasividad que el celular, con la misma lógica de riesgo
+  asumido.
+- Ambas superficies invasivas (`DESKTOP_CONTROL_ENABLED`,
+  `PHONE_SHELL_ENABLED`, `PHONE_CAMERA_ENABLED`) se pueden desactivar por
+  variable de entorno sin tocar código si no las querés.
+- Todas las acciones (tools del celular y de la PC) quedan registradas en un
+  log de auditoría estructurado (`backend/audit.log`, JSON por línea) para
+  poder revisar después qué hizo el agente.
+- La conexión viaja por Tailscale (cifrada de punta a punta por WireGuard) o
+  por LAN local en texto plano — TLS de extremo a extremo está preparado en
+  el backend pero no viene activado por default (ver `backend/certs/README.md`
+  antes de activarlo, corta el acceso hasta reconfigurar el lado Android).
+- **No uses esto en un dispositivo con datos que no puedas permitirte
+  perder o exponer**, y no lo conectes a una tailnet que comparta gente en la
+  que no confiás. Es un proyecto personal pensado para que **su dueño**
+  controle **sus propios** dispositivos.
+
+## Licencia
+
+[MIT](LICENSE) — usalo, modificalo, lo que quieras, sin garantía de ningún tipo.

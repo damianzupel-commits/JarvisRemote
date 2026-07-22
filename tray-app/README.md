@@ -62,7 +62,7 @@ sin que lo hagas vos explícitamente. Si querés que la tray arranque sola con
 Windows: creá un acceso directo a
 
 ```
-pythonw.exe C:\Users\dam\Documents\JarvisRemote\tray-app\tray.py
+pythonw.exe C:\ruta\a\JarvisRemote\tray-app\tray.py
 ```
 
 (usando el `pythonw.exe` del venv de `tray-app`) y ponelo en tu carpeta de

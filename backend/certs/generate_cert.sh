@@ -14,10 +14,10 @@ set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
 
-# Ajustar estas IPs si cambiaron desde la última vez (ver `tailscale status` y
-# `ipconfig` / GET /api/health -> network_candidates para los valores actuales).
-TAILSCALE_IP="100.116.29.74"
-LAN_IP="192.168.1.4"
+# Poné acá TU IP de Tailscale y de LAN (ver `tailscale status` y `ipconfig` /
+# GET /api/health -> network_candidates), y regenerá si alguna cambia.
+TAILSCALE_IP="100.x.x.x"
+LAN_IP="192.168.x.x"
 
 openssl req -x509 -newkey rsa:2048 \
   -keyout key.pem \
