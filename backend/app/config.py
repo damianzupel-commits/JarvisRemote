@@ -62,6 +62,12 @@ class Settings:
     # poder apagarlo sin tocar código.
     phone_camera_enabled: bool = _bool(os.getenv("PHONE_CAMERA_ENABLED"), True)
 
+    # Extracción de frames de video (ver app/video_frames.py y app/tools/phone.py::
+    # phone_record_video) — no depende de PHONE_CAMERA_ENABLED por separado, la tool
+    # de video usa la misma cámara y el mismo flag que la foto.
+    video_frame_interval_seconds: float = float(os.getenv("VIDEO_FRAME_INTERVAL_SECONDS", "1.5"))
+    video_max_frames: int = int(os.getenv("VIDEO_MAX_FRAMES", "8"))
+
     # TLS para servir wss:// en vez de ws:// (la conexión hoy viaja en texto
     # plano — ver sección de seguridad de README.md). Preparado pero apagado
     # por default a propósito: activarlo cambia la URL que espera la app del

@@ -190,6 +190,91 @@ async def test_run_agent_returns_vision_fallback_when_model_cant_see_image(monke
 
 
 @pytest.mark.anyio
+async def test_run_agent_attaches_video_frames_and_strips_video_base64(monkeypatch):
+    tool_call = _fake_tool_call("call_3", "phone_record_video", {"camera": "back", "duration_seconds": 5})
+    video_result = {"video_base64": "ZmFrZXZpZGVv", "mime_type": "video/mp4", "duration_seconds": 5}
+    responses = [
+        _fake_response(tool_calls=[tool_call]),
+        _fake_response(content="Vi que la persona caminaba de izquierda a derecha."),
+    ]
+
+    async def fake_create(**kwargs):
+        return responses.pop(0)
+
+    async def fake_call_tool(name, args):
+        assert name == "phone_record_video"
+        return video_result
+
+    def fake_extract_frames(video_base64, interval_seconds, max_frames):
+        assert video_base64 == "ZmFrZXZpZGVv"
+        return ["frame1_b64", "frame2_b64", "frame3_b64"]
+
+    monkeypatch.setattr(agent.client.chat.completions, "create", fake_create)
+    monkeypatch.setattr(agent, "call_tool", fake_call_tool)
+    monkeypatch.setattr(agent, "extract_frames_from_video_base64", fake_extract_frames)
+
+    conv_id, reply, _ = await run_agent("grabá un video y decime qué ves", conversation_id="test-video-1")
+
+    assert reply == "Vi que la persona caminaba de izquierda a derecha."
+    history = agent._conversations[conv_id]
+
+    tool_messages = [m for m in history if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    assert "video_base64" not in tool_messages[0]["content"]
+    assert "frames_extracted" in tool_messages[0]["content"]
+
+    image_messages = [
+        m for m in history if m.get("role") == "user" and isinstance(m.get("content"), list)
+    ]
+    assert len(image_messages) == 1
+    blocks = image_messages[0]["content"]
+    assert len(blocks) == 4  # 1 bloque de texto + 3 frames
+    assert [b["image_url"]["url"] for b in blocks[1:]] == [
+        "data:image/jpeg;base64,frame1_b64",
+        "data:image/jpeg;base64,frame2_b64",
+        "data:image/jpeg;base64,frame3_b64",
+    ]
+
+
+@pytest.mark.anyio
+async def test_run_agent_handles_video_decode_failure_gracefully(monkeypatch):
+    tool_call = _fake_tool_call("call_4", "phone_record_video", {"camera": "back"})
+    video_result = {"video_base64": "Z2FyYmFnZQ==", "mime_type": "video/mp4"}
+    responses = [
+        _fake_response(tool_calls=[tool_call]),
+        _fake_response(content="El video no se pudo procesar, avisale al usuario."),
+    ]
+
+    async def fake_create(**kwargs):
+        return responses.pop(0)
+
+    async def fake_call_tool(name, args):
+        return video_result
+
+    def fake_extract_frames(video_base64, interval_seconds, max_frames):
+        from app.video_frames import VideoDecodeError
+
+        raise VideoDecodeError("archivo corrupto")
+
+    monkeypatch.setattr(agent.client.chat.completions, "create", fake_create)
+    monkeypatch.setattr(agent, "call_tool", fake_call_tool)
+    monkeypatch.setattr(agent, "extract_frames_from_video_base64", fake_extract_frames)
+
+    conv_id, reply, tool_log = await run_agent("grabá un video", conversation_id="test-video-2")
+
+    # No crashea: el error queda en el resultado de la tool, no se propaga.
+    assert "error" in tool_log[-1]["result"]
+    history = agent._conversations[conv_id]
+    image_messages = [
+        m for m in history if m.get("role") == "user" and isinstance(m.get("content"), list)
+    ]
+    assert image_messages == []
+    # No dispara el fallback de visión: nunca se llegó a adjuntar una imagen real,
+    # así que el modelo sigue respondiendo texto plano normal.
+    assert reply == "El video no se pudo procesar, avisale al usuario."
+
+
+@pytest.mark.anyio
 async def test_run_agent_reraises_llm_error_when_not_awaiting_vision(monkeypatch):
     """El try/except del fallback de visión no debe tragarse errores reales de la
     llamada al modelo que no tengan nada que ver con una foto recién mandada."""

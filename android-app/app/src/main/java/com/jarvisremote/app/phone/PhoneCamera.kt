@@ -9,11 +9,7 @@ import android.util.Base64
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.coroutines.resume
@@ -91,15 +87,6 @@ object CameraXPhoneCamera : PhoneCamera {
             tempFile.delete()
         }
     }
-
-    private suspend fun getCameraProvider(context: Context): ProcessCameraProvider =
-        suspendCancellableCoroutine { cont ->
-            val future = ProcessCameraProvider.getInstance(context)
-            future.addListener(
-                { cont.resume(future.get()) },
-                ContextCompat.getMainExecutor(context),
-            )
-        }
 
     /** CameraX exige que bindToLifecycle/takePicture corran en el main thread. */
     private suspend fun captureToFile(context: Context, file: File, useFrontCamera: Boolean) {
@@ -180,20 +167,6 @@ object CameraXPhoneCamera : PhoneCamera {
         val newWidth = (bitmap.width * scale).toInt().coerceAtLeast(1)
         val newHeight = (bitmap.height * scale).toInt().coerceAtLeast(1)
         return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
-    }
-
-    private class OneShotLifecycleOwner : LifecycleOwner {
-        private val registry = LifecycleRegistry(this)
-        override val lifecycle: Lifecycle get() = registry
-
-        fun start() {
-            registry.currentState = Lifecycle.State.CREATED
-            registry.currentState = Lifecycle.State.STARTED
-        }
-
-        fun destroy() {
-            registry.currentState = Lifecycle.State.DESTROYED
-        }
     }
 }
 

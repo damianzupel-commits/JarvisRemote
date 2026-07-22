@@ -49,7 +49,9 @@ _SHELL_TOOL_NAMES = {"phone_run_command"}
 
 # Tools que usan la cámara del celular — se gatean con su propio flag
 # (PHONE_CAMERA_ENABLED), mismo criterio que las tools de shell/escritorio.
-_CAMERA_TOOL_NAMES = {"phone_take_photo"}
+# phone_record_video usa la misma cámara física que phone_take_photo, así que
+# comparte el mismo flag (no hay un PHONE_VIDEO_ENABLED separado).
+_CAMERA_TOOL_NAMES = {"phone_take_photo", "phone_record_video"}
 
 # Blocklist de patrones obviamente destructivos para phone_run_command. Esto es
 # una mitigación de "evitar el desastre obvio" por matching de texto — NO es un

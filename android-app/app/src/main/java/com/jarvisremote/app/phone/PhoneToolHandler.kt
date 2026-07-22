@@ -105,6 +105,10 @@ object PhoneToolHandler {
                 .takePhoto(context, isFrontCameraRequested(arguments))
                 .toJson()
 
+            "phone_record_video" -> PhoneVideoProvider.instance
+                .recordVideo(context, isFrontCameraRequested(arguments), requestedDurationSeconds(arguments))
+                .toJson()
+
             else -> throw IllegalArgumentException("Tool de celular desconocida: '$tool'")
         }
     }

@@ -10,6 +10,7 @@ from .config import settings
 from .llm_client import client
 from .phone_link import is_phone_connected
 from .tools import call_tool, openai_tool_schemas
+from .video_frames import extract_frames_from_video_base64
 
 logger = logging.getLogger("jarvis.agent")
 
@@ -21,12 +22,16 @@ SYSTEM_PROMPT = (
     "ventanas, click por coordenadas o por control, escribir texto, combinaciones de teclas, "
     "mover mouse, scroll), y —si hay un celular conectado— abrir apps, leer/escribir archivos, "
     "controlar la pantalla (tocar, deslizar, escribir, leer contenido), tomar fotos con la cámara "
-    "(phone_take_photo) para 'ver' el entorno, y ejecutar comandos de shell reales (vía Termux) en "
-    "el celular. phone_take_photo solo sirve para describir/identificar lo que ve si el modelo "
-    "cargado ahora mismo en LM Studio es un modelo de visión (VL) — con un modelo de solo texto la "
-    "foto se saca igual pero vas a recibir un aviso de que no podés verla; en ese caso decíselo al "
-    "usuario tal cual (que cambie a un modelo VL en LM Studio), no inventes una descripción de la "
-    "imagen. phone_run_command es para lo que necesite un intérprete o "
+    "(phone_take_photo) o grabar un clip corto (phone_record_video) para 'ver' el entorno, y "
+    "ejecutar comandos de shell reales (vía Termux) en el celular. Usá phone_take_photo para una "
+    "imagen fija y phone_record_video solo cuando haga falta capturar movimiento o una secuencia "
+    "que una sola foto no explique — el video nunca se manda crudo al modelo: el backend extrae "
+    "varios frames del clip y te los manda como una secuencia de imágenes, así que vas a ver "
+    "'varios momentos', no un video fluido. Ambas tools solo sirven para describir/identificar lo "
+    "que ven si el modelo cargado ahora mismo en LM Studio es un modelo de visión (VL) — con un "
+    "modelo de solo texto la foto/video se captura igual pero vas a recibir un aviso de que no "
+    "podés verla; en ese caso decíselo al usuario tal cual (que cambie a un modelo VL en LM "
+    "Studio), no inventes una descripción de la imagen. phone_run_command es para lo que necesite un intérprete o "
     "herramientas de línea de comandos de verdad (scripts, python, git, etc.) — no la uses para "
     "interactuar con la UI de apps, para eso están phone_tap/phone_swipe/phone_type_text/"
     "phone_global_action. phone_run_command depende de que el usuario tenga Termux instalado y "
@@ -85,29 +90,40 @@ _conversations: dict[str, list[dict]] = {}
 # normal.
 _IMAGE_TOOL_NAMES = {"phone_take_photo"}
 
+# Tools cuyo resultado trae un video: en vez de mandarlo crudo (no confiable en el
+# server local de LM Studio), se extraen frames (ver `video_frames.py`) y se mandan
+# como una secuencia de imágenes en un solo mensaje (ver `_build_multi_image_message`).
+_VIDEO_TOOL_NAMES = {"phone_record_video"}
+
 _VISION_FALLBACK_MSG = (
-    "La foto se sacó bien, pero el modelo que está cargado ahora mismo en LM Studio no puede ver "
-    "imágenes (no es un modelo de visión). Para que Jarvis pueda describir lo que ve la cámara, "
-    "cambiá a un modelo VL en LM Studio (ej. Qwen3-VL-30B-A3B-Instruct) y probá de nuevo."
+    "La foto/video se capturó bien, pero el modelo que está cargado ahora mismo en LM Studio no "
+    "puede ver imágenes (no es un modelo de visión). Para que Jarvis pueda describir lo que ve la "
+    "cámara, cambiá a un modelo VL en LM Studio (ej. Qwen3-VL-30B-A3B-Instruct) y probá de nuevo."
 )
 
 
+def _build_multi_image_message(frames_base64: list[str], caption: str, mime_type: str = "image/jpeg") -> dict:
+    """Arma un mensaje multimodal (formato de contenido de OpenAI) con una o varias
+    imágenes en un solo mensaje 'user' — el mismo mensaje puede llevar N imágenes, que
+    es justo lo que se usa para mandar los frames extraídos de un video de una sola
+    vez (ver `video_frames.py`)."""
+    content: list[dict] = [{"type": "text", "text": caption}]
+    for frame_b64 in frames_base64:
+        content.append(
+            {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{frame_b64}"}}
+        )
+    return {"role": "user", "content": content}
+
+
 def _build_image_message(result: dict) -> dict:
-    """Arma el mensaje multimodal (formato de contenido de OpenAI) con la imagen que
-    devolvió una tool de `_IMAGE_TOOL_NAMES`. Va como mensaje 'user' aparte (no dentro
-    del mensaje 'tool', que se manda como texto plano) — es el formato que entiende
-    LM Studio cuando el modelo cargado es de visión."""
-    mime_type = result.get("mime_type", "image/jpeg")
-    return {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": "(Foto recién tomada con la cámara del celular, adjunta arriba.)"},
-            {
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime_type};base64,{result['image_base64']}"},
-            },
-        ],
-    }
+    """Arma el mensaje multimodal con la imagen que devolvió una tool de
+    `_IMAGE_TOOL_NAMES` (una sola foto — ver `_build_multi_image_message` para el
+    caso de varios frames de un video)."""
+    return _build_multi_image_message(
+        [result["image_base64"]],
+        "(Foto recién tomada con la cámara del celular, adjunta arriba.)",
+        mime_type=result.get("mime_type", "image/jpeg"),
+    )
 
 
 def _trim_history(history: list[dict], max_messages: int) -> None:
@@ -205,6 +221,45 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                         }
                     )
                     history.append(_build_image_message(result))
+                    awaiting_vision_response = True
+                elif tc.function.name in _VIDEO_TOOL_NAMES and "video_base64" in result:
+                    try:
+                        frames = extract_frames_from_video_base64(
+                            result["video_base64"],
+                            interval_seconds=settings.video_frame_interval_seconds,
+                            max_frames=settings.video_max_frames,
+                        )
+                    except Exception as exc:  # decode puede fallar por muchas razones (VideoDecodeError u otras)
+                        logger.warning("no se pudieron extraer frames del video: %s", exc)
+                        error_result = {"error": f"No se pudo procesar el video capturado: {exc}"}
+                        tool_log[-1]["result"] = error_result
+                        history.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": json.dumps(error_result, default=str, ensure_ascii=False),
+                            }
+                        )
+                        continue
+
+                    tool_summary = {k: v for k, v in result.items() if k != "video_base64"}
+                    tool_summary["frames_extracted"] = len(frames)
+                    tool_summary["note"] = f"{len(frames)} frame(s) del video adjuntos en el siguiente mensaje"
+                    history.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.id,
+                            "content": json.dumps(tool_summary, default=str, ensure_ascii=False),
+                        }
+                    )
+                    history.append(
+                        _build_multi_image_message(
+                            frames,
+                            f"({len(frames)} frames extraídos del video recién grabado con la cámara "
+                            "del celular, uno cada "
+                            f"{settings.video_frame_interval_seconds}s aprox., adjuntos arriba.)",
+                        )
+                    )
                     awaiting_vision_response = True
                 else:
                     history.append(

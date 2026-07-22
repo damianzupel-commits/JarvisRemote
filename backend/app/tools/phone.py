@@ -21,6 +21,11 @@ Equivalentes en el celular a las tools de PC (filesystem, browser/pantalla):
   `PHONE_CAMERA_ENABLED`. Solo describe lo que ve si el modelo cargado en LM Studio
   en ese momento es de visión (VL) — `agent.py` maneja con gracia el caso contrario
   (ver su docstring).
+- `phone_record_video`: graba un clip corto (segundos configurables) en silencio con
+  la misma cámara. El backend NO manda el video crudo al modelo — extrae varios
+  frames (`app/video_frames.py`) y los manda como una secuencia de imágenes en un
+  solo mensaje multimodal, la misma estrategia (y limitación de modelo VL) que
+  `phone_take_photo`. Comparte el flag `PHONE_CAMERA_ENABLED`.
   Todas las tools de celular (no solo esta) quedan registradas en el log de
   auditoría estructurado (`app/audit_log.py`, JSON por línea en
   `backend/audit.log`) desde `phone_link.dispatch_to_phone`. Requiere pasos
@@ -292,3 +297,40 @@ def phone_run_command(command: str, timeout: int = 30) -> dict:
 )
 def phone_take_photo(camera: str = "back") -> dict:
     _not_routed("phone_take_photo")
+
+
+@register_tool(
+    name="phone_record_video",
+    description=(
+        "Graba un clip de video corto en silencio con la cámara del celular (sin abrir la app de "
+        "Cámara) para que el modelo 'vea' una escena en movimiento o algo que una sola foto no "
+        "alcance para explicar. IMPORTANTE sobre cómo se procesa: el backend NO le manda el video "
+        "crudo al modelo — extrae varios frames del clip (uno cada 1-2 segundos, hasta un máximo) y "
+        "se los manda como una secuencia de imágenes en un solo mensaje, porque el servidor local de "
+        "LM Studio no tiene soporte confiable de video crudo pero sí de múltiples imágenes por "
+        "prompt. Por eso el resultado va a describir 'varios momentos' del clip, no un video fluido. "
+        "Usar phone_take_photo en vez de esto para una sola imagen fija; usar esto solo cuando haga "
+        "falta capturar movimiento o una secuencia. Requiere el mismo permiso de cámara que "
+        "phone_take_photo. Igual que esa tool, solo sirve para describir lo que ve si el modelo "
+        "cargado en LM Studio es de visión (VL) — con un modelo de solo texto avisale al usuario que "
+        "hace falta cambiar de modelo, no inventes una descripción."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "camera": {
+                "type": "string",
+                "enum": ["back", "front"],
+                "description": "Qué cámara usar (default 'back', la trasera).",
+            },
+            "duration_seconds": {
+                "type": "integer",
+                "description": "Duración del clip en segundos (default 5, no pedir más de ~15).",
+            },
+        },
+        "required": [],
+    },
+    target="phone",
+)
+def phone_record_video(camera: str = "back", duration_seconds: int = 5) -> dict:
+    _not_routed("phone_record_video")
