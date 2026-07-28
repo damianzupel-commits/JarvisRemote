@@ -28,9 +28,20 @@ backend/comfyui.log
 # preferencias y detalles personales del usuario, no son para publicar.
 backend/reflections.jsonl
 
-# Vault de notas Obsidian (backend/app/obsidian/) -- contenido personal del
-# usuario y del agente, igual criterio que reflections.jsonl arriba.
-backend/obsidian_vault/
+# Vault de notas Obsidian (backend/app/obsidian/) -- por defecto privado
+# (contenido personal del usuario y del agente, igual criterio que
+# reflections.jsonl arriba). Excepción: backend/obsidian_vault/jarvis/ es
+# base de conocimiento de ciberseguridad, pensada para ser pública -- se
+# habilita explícitamente abajo. backend/obsidian_vault/human/ (notas
+# personales de Damian) permanece privado.
+backend/obsidian_vault/*
+!backend/obsidian_vault/jarvis/
+
+# Dentro de jarvis/, estas dos notas son decisiones de arquitectura interna
+# (no ciberseguridad) -- quedan privadas hasta confirmar si también deben
+# publicarse.
+backend/obsidian_vault/jarvis/decision-tree-sitter-para-indexar-codebase.md
+backend/obsidian_vault/jarvis/vault-de-obsidian-con-autoria-separada.md
 
 # Cache de índices de codebase (backend/app/codebase/store.py) -- se
 # regenera solo, y puede referenciar rutas/proyectos privados del usuario.
