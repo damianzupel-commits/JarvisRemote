@@ -23,7 +23,16 @@ async def _ensure_page() -> Page:
         if _playwright is None:
             _playwright = await async_playwright().start()
         if _browser is None:
-            _browser = await _playwright.chromium.launch(headless=settings.browser_headless)
+            # channel="msedge" en vez del Chromium propio que Playwright descarga:
+            # ese binario no viene firmado, y en esta PC (con Reason/RAV como
+            # antivirus activo) Windows no lograba activar su manifiesto interno
+            # (chrome_elf.dll vía SxS) -- fallaba SIEMPRE con "BrowserType.launch:
+            # spawn UNKNOWN" (WinError 14001, "configuración en paralelo
+            # incorrecta"), confirmado en el visor de eventos (SideBySide, event id
+            # 33) incluso con una reinstalación limpia del Chromium de Playwright.
+            # El Edge del sistema usa el mismo mecanismo de manifiesto pero SÍ está
+            # firmado, y lanza sin problema. Root cause real: 26/07.
+            _browser = await _playwright.chromium.launch(channel="msedge", headless=settings.browser_headless)
         context = await _browser.new_context()
         _page = await context.new_page()
     return _page

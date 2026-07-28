@@ -34,6 +34,14 @@ data class JarvisSettings(
     /** Si el usuario pidió que el servicio de conexión arranque (y se reinicie tras un reboot). */
     val phoneLinkEnabled: Boolean = false,
     /**
+     * Si el usuario prendió la escucha continua de "hey Jarvis". A diferencia de
+     * [phoneLinkEnabled], esto NO se restaura tras un reinicio del celular:
+     * Android 14+ prohíbe arrancar un foreground service de micrófono desde
+     * BOOT_COMPLETED, así que el usuario tiene que abrir la app y el servicio se
+     * rearma recién ahí (ver MainActivity/SettingsScreen).
+     */
+    val voiceListenerEnabled: Boolean = false,
+    /**
      * Último candidato "directo" (hotspot/LAN, no Tailscale) visto en `network_candidates`
      * de `/api/health` — se prueba primero (con timeout corto) antes de caer a [backendUrl]
      * en cada intento de conexión. Ver `BackendUrlResolver`.
@@ -61,6 +69,7 @@ class SettingsRepository(private val context: Context) {
         val CONVERSATION_ID = stringPreferencesKey("conversation_id")
         val PHONE_FOLDER_URI = stringPreferencesKey("phone_folder_uri")
         val PHONE_LINK_ENABLED = booleanPreferencesKey("phone_link_enabled")
+        val VOICE_LISTENER_ENABLED = booleanPreferencesKey("voice_listener_enabled")
         val LAST_KNOWN_DIRECT_URL = stringPreferencesKey("last_known_direct_url")
         val BLOCKED_PACKAGES = stringSetPreferencesKey("blocked_packages")
     }
@@ -75,6 +84,7 @@ class SettingsRepository(private val context: Context) {
             apiKey = ApiKeyCrypto.decrypt(prefs[Keys.API_KEY] ?: ""),
             phoneFolderUri = prefs[Keys.PHONE_FOLDER_URI] ?: "",
             phoneLinkEnabled = prefs[Keys.PHONE_LINK_ENABLED] ?: false,
+            voiceListenerEnabled = prefs[Keys.VOICE_LISTENER_ENABLED] ?: false,
             lastKnownDirectUrl = prefs[Keys.LAST_KNOWN_DIRECT_URL] ?: "",
             blockedPackages = prefs[Keys.BLOCKED_PACKAGES] ?: DEFAULT_BLOCKED_PACKAGES,
         )
@@ -106,6 +116,10 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setPhoneLinkEnabled(enabled: Boolean) {
         context.dataStore.edit { it[Keys.PHONE_LINK_ENABLED] = enabled }
+    }
+
+    suspend fun setVoiceListenerEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.VOICE_LISTENER_ENABLED] = enabled }
     }
 
     suspend fun saveBlockedPackages(packages: Set<String>) {

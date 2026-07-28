@@ -12,6 +12,11 @@ import kotlinx.coroutines.launch
 /**
  * Si el usuario había prendido la conexión con Jarvis (ver `phoneLinkEnabled` en
  * `SettingsRepository`), la reinicia después de un reboot del celular.
+ *
+ * A propósito NO levanta `VoiceListenerService` (la escucha de "hey Jarvis"):
+ * Android 14+ prohíbe arrancar un foreground service de micrófono desde
+ * BOOT_COMPLETED (el servicio crashearía con ForegroundServiceStartNotAllowedException).
+ * Esa escucha se rearma cuando el usuario abre la app (ver MainActivity).
  */
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

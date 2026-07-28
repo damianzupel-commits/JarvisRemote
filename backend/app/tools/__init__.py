@@ -104,3 +104,19 @@ from . import filesystem  # noqa: E402,F401
 from . import browser  # noqa: E402,F401
 from . import desktop  # noqa: E402,F401
 from . import phone  # noqa: E402,F401
+from . import reflect  # noqa: E402,F401
+from . import codebase  # noqa: E402,F401
+from . import obsidian  # noqa: E402,F401
+
+# generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
+# propósito, no importadas -- no es un problema de estilo, es una precaución
+# de hardware real: el 2026-07-27 la PC se apagó por completo (no un crash de
+# proceso, un apagado físico) al menos dos veces, ambas coincidiendo al
+# segundo con el arranque de una de estas dos tools (confirmado cruzando
+# backend.log contra el Event Log de Windows, Event ID 41/6008 -- "se reinició
+# el sistema sin apagarlo limpiamente"), más un patrón de apagados similares
+# en días previos. No hay sandboxing de software posible contra esto -- si es
+# térmico o de fuente de poder, hace falta resolverlo a nivel de hardware
+# antes de volver a exponer estas tools al agente. Ver INFORME_COMPLETO.md.
+# from . import video_gen  # noqa: E402,F401
+# from . import image_gen  # noqa: E402,F401

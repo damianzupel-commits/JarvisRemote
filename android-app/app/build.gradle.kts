@@ -72,6 +72,10 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
 
+    // Wake word "hey Jarvis" on-device (ver voice/OnnxWakeWordDetector.kt) — corre
+    // los modelos de openWakeWord (Apache-2.0) empaquetados en assets/openwakeword/.
+    implementation(libs.onnxruntime.android)
+
     implementation(libs.retrofit.core)
     implementation(libs.retrofit.kotlinx.serialization.converter)
     implementation(libs.okhttp.core)

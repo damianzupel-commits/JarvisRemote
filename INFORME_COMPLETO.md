@@ -1,318 +1,460 @@
-# Informe completo — JarvisRemote
+# JarvisRemote — Manual completo del proyecto
 
-> **Estado de este documento:** completo. Secciones 1–8 son el estado
-> técnico que Claude conoce de primera mano —código leído, tests corridos,
-> bugs diagnosticados y arreglados en esta sesión, todo verificado contra
-> el repo real, no de memoria. Sección 9 es el resumen narrativo del
-> usuario (arquitectura, decisiones de seguridad, pasos manuales
-> pendientes, lecciones operativas).
-
-**Fecha:** 2026-07-20
-**Estado del backend en este momento:** corriendo, estable, `phone_connected: true`, working tree de git limpio (todo lo de esta sesión está commiteado).
-
----
-
-## 1. Qué es JarvisRemote (resumen técnico)
-
-Un asistente LLM local (corre en LM Studio, modelo de 30B, API OpenAI-compatible en `localhost:1234`) al que se le puede pedir que ejecute acciones reales tanto en la PC (Windows) como en un celular Android conectado, desde una app Android o desde una ventana de chat en la PC (tray-app). Tres componentes:
-
-- **`backend/`** — FastAPI + Python. Habla con LM Studio, corre el loop del agente (tool calling), expone `POST /api/chat`, `GET /api/health`, y `WS /ws/phone`.
-- **`tray-app/`** — Python + pystray. Administra el backend como subproceso (arrancar/parar/logs) y ahora también tiene una ventana de chat propia (Tkinter) para hablarle a Jarvis desde la PC.
-- **`android-app/`** — Kotlin + Jetpack Compose. Chat contra el backend + control total del celular (Accessibility Service + filesystem SAF) vía una conexión WebSocket saliente mantenida por un foreground service.
+> **Qué es este documento:** un manual del estado real del proyecto al
+> 2026-07-27, no una bitácora de sesión. Reemplaza una versión anterior de
+> este mismo archivo que era un informe de debugging de una sesión puntual
+> (2026-07-20) y que ya no reflejaba el código actual (mencionaba LM Studio,
+> la ventana de chat vieja en Tkinter, y no existían todavía
+> generate_image/generate_video/jarvis_reflect ni la voz). Todo lo de acá
+> está verificado contra el repo real, tests corridos, y pruebas en vivo
+> hechas en las últimas sesiones — donde algo no está confirmado en vivo, se
+> dice explícitamente. Nada de esto es optimista a propósito: si algo está
+> roto o a medio probar, se dice.
 
 ---
 
-## 2. Estructura exacta del repo
+## 1. Qué es JarvisRemote
 
-```
-JarvisRemote/
-├── README.md
-├── INFORME_COMPLETO.md          (este archivo)
-│
-├── backend/
-│   ├── README.md
-│   ├── run.py                    # entrypoint: uvicorn.run("app.main:app", ...)
-│   ├── requirements.txt / requirements-dev.txt
-│   ├── pytest.ini
-│   ├── .env / .env.example
-│   ├── .venv/                    # venv del backend (Python 3.12 base)
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py               # FastAPI app: /api/health, /api/chat, /ws/phone
-│   │   ├── agent.py              # loop del agente (system prompt, tool-calling loop)
-│   │   ├── llm_client.py         # cliente OpenAI/AsyncOpenAI apuntando a LM Studio
-│   │   ├── config.py             # Settings desde .env
-│   │   ├── auth.py               # verify_api_key (Bearer token)
-│   │   ├── models.py             # ChatRequest/ChatResponse/ToolCallLog (pydantic)
-│   │   ├── network_info.py       # detección/clasificación de IPs (hotspot/lan/tailscale)
-│   │   ├── phone_link.py         # estado de la conexión WS del celular + dispatch de tool calls
-│   │   ├── logging_config.py     # logging.basicConfig, nivel INFO
-│   │   └── tools/
-│   │       ├── __init__.py       # registry: register_tool / get_tools / openai_tool_schemas / call_tool
-│   │       ├── filesystem.py     # fs_* (PC)
-│   │       ├── browser.py        # browser_* (PC, Playwright/Chromium)
-│   │       └── phone.py          # phone_* (celular, despachadas por WS)
-│   └── tests/
-│       ├── conftest.py
-│       ├── test_smoke.py
-│       ├── test_tools_registry.py
-│       ├── test_phone_link.py
-│       └── test_phone_ws_endpoint.py
-│
-├── tray-app/
-│   ├── README.md
-│   ├── tray.py                   # ícono de bandeja, menú, poll de salud
-│   ├── config.py                 # lee backend/.env, arma BASE_URL/HEALTH_URL/CHAT_URL/API_KEY
-│   ├── process_manager.py        # start()/stop()/is_running() sobre el backend como subproceso
-│   ├── icon.py                   # dibuja el ícono con Pillow
-│   ├── chat_window.py            # ventana de chat (Tkinter) contra POST /api/chat
-│   ├── requirements.txt
-│   └── backend.log               # log del backend SOLO si se arrancó vía tray (ver sección 7)
-│
-└── android-app/
-    ├── README.md
-    ├── SETUP_RAPIDO.md            # guía sin Android Studio: setup-android-sdk.ps1 + deploy.ps1
-    ├── setup-android-sdk.ps1      # instala JDK 17 (Temurin) + Android SDK cmdline-tools
-    ├── deploy.ps1                 # build + install + habilita Accessibility Service por adb
-    ├── build.gradle.kts / settings.gradle.kts / gradle.properties
-    ├── gradle/libs.versions.toml
-    └── app/
-        ├── build.gradle.kts       # applicationId com.jarvisremote.app
-        └── src/main/
-            ├── AndroidManifest.xml
-            ├── java/com/jarvisremote/app/
-            │   ├── MainActivity.kt
-            │   ├── JarvisApp.kt              # NavHost: settings <-> chat
-            │   ├── data/
-            │   │   ├── NetworkModels.kt       # kotlinx.serialization
-            │   │   ├── BackendApi.kt          # Retrofit: GET /api/health, POST /api/chat
-            │   │   ├── ApiClientProvider.kt
-            │   │   ├── SettingsRepository.kt  # DataStore: backend_url, api_key, conversation_id,
-            │   │   │                          # phone_folder_uri, phone_link_enabled
-            │   │   ├── ChatRepository.kt
-            │   │   └── NetworkError.kt
-            │   ├── phone/
-            │   │   ├── PhoneLinkService.kt     # foreground service, WS saliente a /ws/phone
-            │   │   ├── JarvisAccessibilityService.kt
-            │   │   ├── SafFileStore.kt         # filesystem sandboxeado (SAF)
-            │   │   ├── PhoneToolHandler.kt     # router de tool calls recibidas
-            │   │   ├── ToolCallModels.kt
-            │   │   ├── AccessibilityUtils.kt
-            │   │   └── BootReceiver.kt         # relanza el service tras reboot si estaba on
-            │   └── ui/
-            │       ├── theme/
-            │       ├── chat/ (ChatScreen.kt, ChatViewModel.kt, ChatMessage.kt)
-            │       └── settings/ (SettingsScreen.kt, SettingsViewModel.kt)
-            └── res/ (values, xml/accessibility_service_config.xml, drawable, mipmap)
+Un asistente de IA local — corre enteramente en la PC del usuario, sin
+depender de ningún servicio en la nube — al que se le puede dar órdenes desde
+el celular o desde la PC, y que puede **ejecutar acciones reales** en ambos
+dispositivos, no solo responder texto. El modelo de lenguaje corre en
+[Ollama](https://ollama.com), local.
+
+Tres componentes:
+
+- **`backend/`** — Python + FastAPI. Habla con Ollama (API compatible OpenAI),
+  corre el loop del agente (tool calling), expone `GET /api/health`,
+  `POST /api/chat` y `WS /ws/phone` (todos autenticados con un Bearer token).
+- **`tray-app/`** — Python + pystray + PySide6. Administra el backend como
+  subproceso (arrancar/parar/reiniciar) y tiene su propia ventana de chat de
+  escritorio con tema oscuro, selector de modelo, sidebar de accesos directos,
+  y escucha de voz continua.
+- **`android-app/`** — Kotlin + Jetpack Compose. Chat contra el backend, más
+  un foreground service que mantiene una conexión WebSocket saliente hacia
+  `/ws/phone` para recibir y ejecutar tool calls en el celular (control total
+  de pantalla vía Accessibility Service, shell real vía Termux, cámara).
+
+No hay ningún puerto expuesto a internet: el backend escucha en la IP privada
+de Tailscale del usuario (o en la LAN local), y todas las requests requieren
+el Bearer token.
+
+---
+
+## 2. Instalación
+
+### 2.1. Con un comando (`install.ps1`, nuevo)
+
+```powershell
+.\install.ps1
 ```
 
+Cubre la parte que es igual para cualquier instalación: detecta hardware
+(CPU/RAM/GPU, con la limitación conocida de que WMI no siempre reporta bien
+la VRAM en GPUs >4GB), recomienda un tier, instala/verifica Ollama, baja el
+modelo del tier elegido y lo arma con el template de tool-calling corregido
+(ver `installer/ollama/*.Modelfile`, sección 4), y deja `backend/.env` +
+los venvs de `backend/` y `tray-app/` listos. Es idempotente.
+
+**Explícitamente fuera de alcance de este script** (documentado en su propio
+header, no es un olvido):
+- ComfyUI (`generate_image`/`generate_video`): instalación portable propia,
+  con un intérprete Python distinto según la GPU. Ver sección 4.6 sobre
+  estabilidad conocida antes de meterse con esto.
+- La app Android: ver `android-app/README.md` +
+  `android-app/setup-android-sdk.ps1` + `deploy.ps1`.
+- Termux, TLS, Tailscale: pasos manuales, documentados en
+  `backend/README.md` — son decisiones de seguridad conscientes, no algo
+  para automatizar a ciegas.
+
+**Nota de honestidad sobre este script**: es nuevo (agregado en esta sesión),
+tiene el syntax verificado y la lógica revisada, pero **no se corrió de
+punta a punta en una máquina limpia** (correrlo completo pide input
+interactivo y reinstalaría Ollama en una máquina que ya lo tiene). Los tags
+base de Ollama que usa (`qwen3:30b-a3b`, `qwen3:8b`) se confirmaron contra
+el registry real (el manifest existe), pero no se verificó el contenido
+exacto del blob contra lo que corre hoy en la máquina de Damian.
+
+### 2.2. Manual, paso a paso
+
+Ver `backend/README.md`, `tray-app/README.md` y `android-app/README.md` para
+el detalle completo. Resumen:
+
+```bash
+# Backend
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env    # completar API_KEY, HOST, LMSTUDIO_MODEL, etc.
+python run.py
+
+# Ollama: bajar un modelo con soporte de tool calling y apuntar LMSTUDIO_MODEL
+# a su nombre en `ollama list`. Ver installer/ollama/*.Modelfile si el modelo
+# tiene problemas de tool-calling con el template default de Ollama.
+
+# Tray app (recomendado, supervisa el backend en vez de correrlo suelto)
+cd tray-app
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python tray.py
+```
+
+### 2.3. Los 3 tiers de modelo
+
+Seleccionables desde el selector de la ventana de PC (ver sección 5) o
+seteando `LMSTUDIO_MODEL` en `backend/.env` a mano. Cambiar de tier **reinicia
+el backend** (lee el `.env` una sola vez al arrancar, no hay hot-reload).
+
+| Tier | Nombre en Ollama | Modelo base | Parámetros | Notas |
+|---|---|---|---|---|
+| **Lite** | `jarvis-text-lite` | Qwen3-8B (Q4_K_M) | 8.2B | Para hardware con menos VRAM/RAM. |
+| **Medio** | `jarvis-text-v2` | Qwen3-30B-A3B, MoE (Q4_K_M) | 30.5B | El "principal", usado en la mayoría de las pruebas de esta sesión. |
+| **Hard** | `jarvis-text-hard` | — | — | **Es un alias del mismo modelo que "Medio"** (`ollama cp jarvis-text-v2 jarvis-text-hard`) — no hay un modelo de texto distinto para este tier. Lo que lo distingue no es el modelo de texto sino que está pensado para tareas más pesadas (generación de imagen/video, disponibles como tool independientemente del tier activo). El selector necesita un nombre de Ollama propio para poder recordar cuál de los dos eligió el usuario, aunque el modelo real sea idéntico. |
+
+Los tres tienen el mismo template de chat corregido (ver `installer/ollama/`)
+— el modelo "jarvis-text" (v1, sin el fix) tiene un bug real de tool-calling
+confirmado, no usarlo.
+
 ---
 
-## 3. Tools registradas (las 21, con parámetros exactos)
+## 3. Arquitectura en detalle
 
-Confirmado corriendo `openai_tool_schemas()` directamente contra el código — esta es la lista real que se le manda a LM Studio en cada request, siempre completa, sin condicionar por si hay celular conectado o no (ver bug #1 más abajo).
+### `backend/`
 
-### PC — filesystem (`backend/app/tools/filesystem.py`), sandboxeadas a `FS_ALLOWED_ROOT`
+- `app/main.py` — `GET /api/health` (estado + candidatos de red LAN/hotspot/
+  Tailscale), `POST /api/chat` (autenticado), `WS /ws/phone`.
+- `app/agent.py` — loop del agente: manda mensajes + los 37 tool schemas a
+  Ollama, ejecuta las tool calls que pida el modelo, devuelve resultados,
+  repite hasta texto final o `MAX_AGENT_ITERATIONS` (default 10). Historial en
+  memoria por `conversation_id`, podado a `MAX_HISTORY_MESSAGES` (default 40)
+  para no reventar la ventana de contexto en conversaciones largas. Cada turno
+  inyecta una nota de sistema fresca con el estado real de la conexión del
+  celular (no depende de lo que el modelo haya dicho antes en la misma
+  conversación sobre si el celular estaba conectado).
+- `app/llm_client.py` — `AsyncOpenAI` apuntando a Ollama (`localhost:11434/v1`).
+  Es async de punta a punta — un cliente síncrono acá bloquearía todo el
+  event loop de uvicorn durante cada inferencia (bug real de una sesión
+  anterior, ya arreglado).
+- `app/tools/` — registry de tools (`register_tool`/`get_tools`/
+  `openai_tool_schemas`/`call_tool`), ver catálogo completo en la sección 4.
+- `app/phone_link.py` — estado de la conexión WS del celular + despacho de
+  tool calls `target="phone"` (el backend nunca ejecuta esas tools
+  localmente, solo las reenvía y espera la respuesta correlacionada por id).
+- `app/audit_log.py` — log de auditoría estructurado (JSON por línea,
+  `backend/audit.log`, rotado, gitignored) de cada tool call de celular y de
+  escritorio.
+- `app/network_info.py` — clasifica IPs (LAN/hotspot/Tailscale) para que el
+  celular pueda elegir la ruta más directa disponible.
 
-| Tool | Parámetros | Notas |
+**Tests: 146 pasan** (`cd backend && pytest`).
+
+### `tray-app/`
+
+- `tray.py` — ícono de bandeja (pystray), autoarranca el backend, poll de
+  salud cada 3s, auto-abre la ventana principal al iniciar.
+- `process_manager.py` — `start()`/`stop()`/`is_running()` sobre el backend
+  como subproceso, más `set_active_model()` (reescribe `LMSTUDIO_MODEL` en
+  el `.env` y reinicia — usado por el selector de tier).
+- `ui/main_window.py` — la ventana principal, ver sección 5.
+- `ui/settings_window.py` — diálogo de permisos/conectores, ver sección 5.
+- `voice_listener.py` — voz de la PC, ver sección 6.1.
+
+**Tests: pasan** (`pytest`, usa `pytest-qt` para no abrir ventanas reales).
+
+### `android-app/`
+
+- Kotlin + Jetpack Compose + Material3. Compila y se instala 100% por línea
+  de comandos (JDK 17 + Android SDK cmdline-tools, sin Android Studio) — ver
+  `setup-android-sdk.ps1` + `deploy.ps1`.
+- `phone/PhoneLinkService.kt` — foreground service, WebSocket saliente con
+  reconexión con backoff exponencial.
+- `phone/JarvisAccessibilityService.kt` — control de pantalla (tap/swipe/
+  type/read_screen/global_action), con un blocklist configurable de apps
+  sensibles (2FA, bancos) — mitigación por nombre de paquete, no un sandbox
+  real.
+- `phone/SafFileStore.kt` — filesystem del celular sandboxeado a una carpeta
+  elegida por el usuario vía Storage Access Framework.
+- `phone/TermuxCommandRunner.kt` + `TermuxResultService.kt` — ejecución de
+  comandos reales vía Termux (`phone_run_command`).
+- `voice/` — wake word "hey Jarvis" on-device + `SpeechRecognizer`, ver
+  sección 6.2 (**con un bug real sin resolver**).
+- `ApiKeyCrypto.kt` — cifra el API key guardado con AES-256-GCM en Android
+  Keystore, en vez de guardarlo en texto plano en DataStore.
+
+---
+
+## 4. Catálogo completo de tools (37, confirmado corriendo `get_tools()` contra el código real)
+
+### 4.1. Filesystem de la PC (`fs_*`, 6) — sandboxeadas a `FS_ALLOWED_ROOT`
+
+`fs_list_dir`, `fs_read_file`, `fs_write_file`, `fs_create_dir`,
+`fs_move_path`, `fs_delete_path` (esta última apagada por default,
+`FS_ALLOW_DELETE=false`).
+
+**Estado:** funcional, sandboxing verificado por tests.
+
+### 4.2. Navegador de la PC (`browser_*`, 6) — Playwright + Edge del sistema
+
+`browser_open`, `browser_click`, `browser_type`, `browser_get_text`,
+`browser_screenshot`, `browser_close`. Usa el Microsoft Edge ya instalado en
+Windows (`channel="msedge"`), no un Chromium propio de Playwright — evita el
+fallo `BrowserType.launch: spawn UNKNOWN` que causaba cierto software de
+seguridad con el Chromium sin firmar de Playwright.
+
+**Estado:** funcional, probado.
+
+### 4.3. Control de escritorio de la PC (`desktop_*`, 10) — pywinauto + pyautogui
+
+`desktop_screenshot`, `desktop_list_windows`, `desktop_focus_window`,
+`desktop_click`, `desktop_click_element`, `desktop_type_text`,
+`desktop_press_key`, `desktop_move_mouse`, `desktop_scroll`,
+`desktop_launch_app`. Control total e invasivo de cualquier ventana/programa
+abierto — mismo nivel de riesgo que el Accessibility Service del celular, sin
+sandboxing posible. No puede controlar ventanas elevadas (UAC, admin) por
+restricción de Windows (UIPI). Blocklist de lanzamientos obviamente
+destructivos (`format`, `diskpart`, `cipher /w`, `vssadmin delete`) — matching
+de texto, no una garantía.
+
+**Estado:** implementado, con tests unitarios, pero **no validado en vivo
+contra una GUI real de otra app en esta sesión** — no confundir "tests
+pasan" con "se probó clickeando algo de verdad".
+
+### 4.4. Control del celular (`phone_*`, 12) — despachadas por WS, Accessibility Service + Termux + cámara
+
+`phone_open_app`, `phone_list_dir`, `phone_read_file`, `phone_write_file`,
+`phone_tap`, `phone_swipe`, `phone_type_text`, `phone_read_screen`,
+`phone_global_action`, `phone_run_command`, `phone_take_photo`,
+`phone_record_video`.
+
+**Estado real, por sub-grupo:**
+- **Tap/swipe/type/read_screen/global_action/filesystem SAF**: confirmado
+  funcional en dispositivo real (Moto G72), incluida la reconexión del
+  Accessibility Service por adb en la sesión de hoy.
+- **`phone_run_command` (Termux)**: **con un error activo reportado por el
+  usuario, sin investigar todavía** — "app is in background uid null" al
+  intentar correr un comando, posiblemente una restricción nueva de Android
+  bloqueando el intent `RUN_COMMAND` cuando la app no está en foreground.
+  Pendiente de diagnóstico.
+- **`phone_take_photo`/`phone_record_video` (cámara)**: agregadas
+  recientemente (commits `0f264a0`, `8eebc32`). El video se convierte a una
+  secuencia de frames (no se manda el video crudo) para que lo puedan
+  consumir modelos de visión. **Con errores reportados por el usuario sin
+  investigar todavía**: "El celular no respondió a tiempo" y "Camera is
+  closed".
+
+### 4.5. Generación de contenido (2) — ComfyUI local en GPU — **DESACTIVADAS por precaución de hardware**
+
+> ⚠️ **`generate_image` y `generate_video` están deshabilitadas a propósito
+> (comentadas en `backend/app/tools/__init__.py`, no borradas — reactivables
+> con solo descomentar dos líneas una vez resuelto el problema de hardware).
+> Esto no es una limitación de software ni una elección de producto: es una
+> precaución de seguridad física.**
+
+- **`generate_image`** — Flux.1 Schnell (GGUF Q4_K_S), una sola pasada de
+  KSampler (4 pasos), rápido.
+- **`generate_video`** — Wan 2.2 (workflow de dos expertos high/low noise),
+  lento (medido entre ~4.3 y ~14 min para 1s de clip).
+- Ambas comparten infraestructura (`_comfyui_shared.py`): coordinan VRAM con
+  Ollama (descargan el modelo de texto antes de generar, lo recargan al
+  terminar), y arrancan/paran el proceso de ComfyUI si hace falta.
+
+**Por qué se desactivaron — evidencia dura, no una sospecha:**
+
+El 2026-07-27, la PC de Damian **se apagó por completo** (no un crash de
+proceso ni de ComfyUI — un apagado físico de hardware) al menos dos veces,
+ambas coincidiendo *al segundo* con el arranque de una de estas dos tools:
+
+| Hora | Evidencia del backend | Evidencia del Event Log de Windows |
 |---|---|---|
-| `fs_list_dir` | `path?` (default `.`) | Lista archivos/subcarpetas en la PC |
-| `fs_read_file` | `path`, `max_chars?` (default 20000) | Lee texto |
-| `fs_write_file` | `path`, `content`, `append?` (default false) | Crea carpetas intermedias si hace falta |
-| `fs_create_dir` | `path` | — |
-| `fs_move_path` | `source`, `destination` | Mueve/renombra |
-| `fs_delete_path` | `path` | **Deshabilitada por default**, requiere `FS_ALLOW_DELETE=true` en `.env` |
+| 16:23:06 | `tool_call name=generate_image` a las 16:23:06,391 | Event 6008: "el cierre anterior del sistema a las 16:23:06 resultó inesperado" |
+| ~16:57 | Polling de `generate_video` (prompt del globo) corriendo normal hasta 16:56:58, silencio total después | `LastBootUpTime` = 16:57:26 (reinicio) |
 
-Todas las descripciones dicen explícitamente "en la PC del usuario" (agregado en esta sesión, ver sección 5).
+Sumado a un patrón previo de apagados similares (Event ID 41, "crítico", "se
+reinició el sistema sin apagarlo limpiamente") en los días 22 y 23 de julio,
+y un tercer apagado esa misma mañana del 27/07 (que en su momento se
+diagnosticó, erróneamente, como "se cayó el proceso del backend" — en
+realidad fue la PC entera).
 
-### PC — browser (`backend/app/tools/browser.py`), Playwright/Chromium, una página persistente entre llamadas
+**Diagnóstico anterior a este hallazgo (sigue siendo válido como parte del
+problema, pero no explica un apagado físico de PC):** ComfyUI puede
+crashear a nivel nativo (sin traceback de Python) si se le piden dos
+generaciones seguidas o en paralelo — reproducido tres veces en una sesión
+previa, con la hipótesis de que la GPU (RX 6700 XT, `gfx1031`) no está
+oficialmente soportada por ROCm. Se habían aplicado dos mitigaciones de
+software (fail-fast en el polling en vez de colgar 10 minutos, y limpieza de
+procesos zombie de ComfyUI) — **esas mitigaciones siguen en el código y
+siguen siendo válidas**, pero un apagado físico de la PC es un problema de
+otra categoría que ningún fail-fast de software puede prevenir.
 
-| Tool | Parámetros | Notas |
-|---|---|---|
-| `browser_open` | `url` | Lanza Chromium si no está corriendo. Descripción aclara: "navegador... en la PC... no para abrir apps del celular" |
-| `browser_click` | `selector` (CSS) | timeout 5000ms |
-| `browser_type` | `selector`, `text`, `submit?` (default false) | `submit=true` presiona Enter |
-| `browser_get_text` | `selector?` (default `body`) | Trunca a 8000 chars |
-| `browser_screenshot` | `path?` (default `last_screenshot.png`) | — |
-| `browser_close` | — | Libera el browser/page |
+**Hipótesis sin confirmar, a investigar antes de reactivar:** protección
+térmica de la GPU/CPU, la fuente de poder sin margen para el pico de consumo
+de la carga GPU, o un crash de driver lo bastante severo como para forzar un
+reset de hardware en vez de solo matar el proceso. Ninguna de las tres se
+investigó todavía — hace falta monitorear temperaturas/voltajes durante una
+generación controlada (con la PC vigilada, no desatendida) antes de siquiera
+considerar reactivar estas dos tools.
 
-### Celular (`backend/app/tools/phone.py`), `target="phone"`, despachadas por WS a `/ws/phone`
+**Cómo quedaron desactivadas:** no se borró código. `backend/app/tools/__init__.py`
+simplemente no importa `video_gen`/`image_gen` (comentado con la explicación
+de por qué), así que `register_tool` nunca corre para ellas — el LLM ya no
+las ve en la lista de 35 tools disponibles (confirmado con `get_tools()`
+corriendo contra el backend real, y con los 146 tests del backend pasando
+igual). Reactivarlas es descomentar esas dos líneas, pero **no hacerlo hasta
+entender la causa del apagado**.
 
-Los handlers de estas 9 tools nunca se ejecutan de verdad en el backend — `call_tool()` intercepta por `target` y llama a `phone_link.dispatch_to_phone()`, que manda el tool call por WebSocket al celular y espera la respuesta correlacionada por `id` (timeout default `PHONE_TOOL_TIMEOUT=30s`, configurable en `.env`).
+### 4.6. Memoria de reflexión del agente (1)
 
-| Tool | Parámetros | Notas |
-|---|---|---|
-| `phone_open_app` | `package_name` | Descripción (ajustada en esta sesión): "en el CELULAR del usuario (Android)... no usar para abrir programas o sitios web en la PC" |
-| `phone_list_dir` | `path?` (default `.`) | Sandboxeado a la carpeta SAF elegida por el usuario |
-| `phone_read_file` | `path`, `max_chars?` (default 20000) | — |
-| `phone_write_file` | `path`, `content`, `append?` (default false) | — |
-| `phone_tap` | `x`, `y` (int, píxeles) | Vía Accessibility Service |
-| `phone_swipe` | `x1`, `y1`, `x2`, `y2`, `duration_ms?` (default 300) | — |
-| `phone_type_text` | `text` | Requiere un campo con foco (usar `phone_tap` antes si hace falta) |
-| `phone_read_screen` | — | Devuelve texto/descripciones/posiciones/clickeable de todos los nodos en pantalla |
-| `phone_global_action` | `action` (enum: `back`, `home`, `recents`, `notifications`) | — |
+- **`jarvis_reflect`** (`action="save"`/`"query"`) — JSONL append-only
+  (`backend/reflections.jsonl`, gitignored, puede tener notas personales),
+  búsqueda simple por superposición de palabras. Para que el modelo recuerde
+  decisiones no triviales entre conversaciones que no comparten historial.
 
-**Nota de seguridad ya conocida:** el Accessibility Service puede leer y accionar sobre *cualquier app visible en pantalla*, incluidas apps de banca, 2FA, mensajería. No hay forma de acotar ese alcance a nivel Android.
-
----
-
-## 4. Bug #1 — Historial de conversación contaminado (SYSTEM_PROMPT estático)
-
-**Síntoma reportado:** pidiendo "abre la calculadora en mi celular" (sin ambigüedad), el modelo respondió *"No tengo acceso al celular del usuario en este momento..."* y ni siquiera intentó llamar a ninguna tool `phone_*`, a pesar de que el celular estaba realmente conectado (`phone_connected: true`).
-
-**Investigación (antes de tocar código, con evidencia):**
-1. Se confirmó que `openai_tool_schemas()` manda las 21 tools **siempre**, sin ningún chequeo de `is_phone_connected()` — descartado que fuera un bug de qué tools se envían.
-2. Se probó el mismo pedido con un `conversation_id` **nuevo**: el modelo llamó correctamente a `phone_open_app`. Esto probó que el problema no era estructural sino específico de esa conversación puntual.
-3. Se le pidió al modelo, usando el `conversation_id` real de la app, que resumiera qué había dicho antes sobre el acceso al celular. Su propio resumen reveló la causa: en un turno anterior de esa misma conversación había dicho *"No tengo acceso al celular"* (probablemente cuando el celular aún no estaba conectado o el modelo dudó), y en turnos siguientes repetía esa misma afirmación citándose a sí mismo, sin importar el estado real ni las tools disponibles.
-
-**Causa raíz:** `backend/app/agent.py` guarda el historial completo por `conversation_id` en un diccionario en memoria (`_conversations`), **para siempre, sin expirar ni corregirse**. El `SYSTEM_PROMPT` es una constante fija con lenguaje condicional ("—si hay un celular conectado—") que nunca se actualiza con el estado real en el momento de cada request. Una vez que el modelo genera una afirmación falsa, esa afirmación queda fija en el historial y el modelo la trata como hecho consumado en turnos futuros (autoconsistencia).
-
-**Fix aplicado** (commit `91163d3`): cada llamada a LM Studio ahora suma una nota de sistema fresca —calculada de nuevo en cada vuelta del loop del agente, con `is_phone_connected()` real— **sin persistirla en `history`** (así nunca se vuelve stale ni se acumula turno a turno). El `SYSTEM_PROMPT` le dice explícitamente al modelo que confíe en esa nota por sobre cualquier cosa que haya dicho antes en la conversación sobre el estado del celular.
-
-```python
-def _phone_status_note() -> dict:
-    connected = is_phone_connected()
-    return {
-        "role": "system",
-        "content": (
-            "[Estado actual, verificado ahora mismo] Celular conectado: "
-            + ("SÍ" if connected else "NO")
-            + (". Las tools phone_* deberían funcionar."
-               if connected else
-               ". Las tools phone_* van a fallar hasta que el usuario conecte el celular.")
-        ),
-    }
-```
-
-**Verificación:** con el backend reiniciado (limpia `_conversations`) y usando el mismo `conversation_id` de la app que antes daba la respuesta mala, "abre la calculadora en mi celular" ahora hace que el modelo llame a `phone_open_app` (falla por package incorrecto — problema aparte, ver sección 6) y a `phone_read_screen` para investigar, en vez de negar tener acceso.
+**Estado:** implementado, con tests unitarios. No se validó en una
+conversación real de punta a punta esta sesión (guardar una reflexión y que
+un turno *futuro* la recupere y la use).
 
 ---
 
-## 5. Ajuste de descripciones de tools (ambigüedad PC vs. celular)
+## 5. Interfaz nueva de PC (PySide6)
 
-**Síntoma previo y más leve:** pidiendo "abre la calculadora Jarvis" (sin decir "en mi celular"), el modelo eligió `browser_open` (PC) para buscar "calculadora" en Google, en vez de `phone_open_app`.
+Reemplaza la vieja ventana de Tkinter (borrada, `tray-app/chat_window.py` ya
+no existe). Tema oscuro fijo (pedido explícito del usuario, sin opción de
+volver a claro).
 
-**Fix aplicado** (commit `578e25d`, sin tocar el system prompt): se ajustaron las *descripciones individuales* de las tools para que cada una diga explícitamente si actúa en la PC o en el celular:
-- `phone_open_app`: "en el CELULAR del usuario (Android)... no usar para abrir programas o sitios web en la PC".
-- `browser_open`: "navegador Chromium... en la PC del usuario... no para abrir apps del celular ni programas de escritorio".
-- Las 6 tools `fs_*` suman "en la PC del usuario" a su descripción, por simetría con las `phone_*` equivalentes (que ya decían "en el celular").
-
-No se tocó `agent.py`/`SYSTEM_PROMPT` en este cambio — la hipótesis (confirmada después, indirectamente, por el comportamiento correcto en pruebas posteriores) era que el modelo atiende más a la descripción puntual de cada tool que al prompt general.
-
-Efecto colateral encontrado y arreglado en la misma sesión: ese mismo intento fallido de `browser_open` reveló que **Playwright no tenía Chromium instalado** en esta PC (`BrowserType.launch: Executable doesn't exist...`). Se corrió `playwright install chromium` en el venv del backend (no requiere reiniciar el backend — Chromium se lanza lazy, recién en el primer uso por proceso).
-
----
-
-## 6. Bug #2 — Cliente OpenAI sincrónico bloqueando el event loop (el más serio)
-
-**Síntoma reportado:** la app mostraba "Estado: desconectado, reintentando..." con WiFi activo. `GET /api/health` no respondía (timeout, sin error — colgado, no caído). El log del backend mostraba una request de `/api/chat` en loop durante ~6 minutos, reintentando `phone_global_action` una y otra vez, fallando siempre con "Se reemplazó la conexión del celular por una nueva" o "El celular se desconectó".
-
-**Causa raíz, encontrada leyendo código, no solo infiriendo:**
-
-```python
-# backend/app/llm_client.py (ANTES)
-from openai import OpenAI
-client = OpenAI(base_url=settings.lmstudio_base_url, api_key="lm-studio")
-```
-
-```python
-# backend/app/agent.py (ANTES)
-response = client.chat.completions.create(...)   # sin await, sin executor,
-                                                    # dentro de una función async
-```
-
-`uvicorn` corre un solo event loop. Una llamada **sincrónica** ejecutada directamente adentro de una corutina `async` bloquea ese loop entero mientras dura — y una inferencia local de un modelo de 30B puede tardar entre 20 y 100+ segundos. Durante ese bloqueo, el proceso no podía atender ningún otro tráfico: ni `GET /api/health`, ni los frames del WebSocket del celular. Cada vez que el agente hacía una tool call al celular, el WS se quedaba sin atender durante la siguiente inferencia, el celular (por su lado) decidía que la conexión estaba muerta y reconectaba, y esa reconexión mataba el tool call pendiente — el mismo patrón de inestabilidad de conexión que se venía arrastrando durante gran parte de la sesión, no solo este incidente puntual.
-
-Además, durante esta misma investigación el proceso viejo terminó en un estado roto aparte: un error de red (`OSError: [WinError 64] El nombre de red especificado ya no está disponible`) tumbó su loop de `accept()` en asyncio — el proceso seguía vivo pero ya no escuchaba en el puerto. Confirma que había que reiniciar de todas formas, más allá del fix.
-
-**Fix aplicado** (commit `4d312f4`):
-
-```python
-# llm_client.py (AHORA)
-from openai import AsyncOpenAI
-client = AsyncOpenAI(base_url=settings.lmstudio_base_url, api_key="lm-studio")
-```
-
-```python
-# agent.py (AHORA)
-response = await client.chat.completions.create(...)
-```
-
-**Verificación real, en vivo:** se reinició el backend, se lanzó una request de chat sin tools (pregunta de texto general, para aislar la variable) en background, y **mientras estaba en curso** se hicieron 6+ pedidos concurrentes a `/api/health`, todos respondidos en ~7–9ms cada uno. La request de chat tardó **117.5 segundos** en total y devolvió `200 OK` — el event loop nunca se bloqueó durante ese tiempo. Este fue el último cambio de la sesión antes de la pausa.
+- **Chat central**: mandar/recibir mensajes contra `POST /api/chat`, mismas
+  tools que la app Android (incluidas las `phone_*` si el celular está
+  conectado). Cada burbuja del asistente se puede seleccionar con el mouse.
+- **Indicador de "pensando..."** (agregado en esta sesión): burbuja gris
+  itálica mientras se espera la respuesta del backend, para que una request
+  larga (Ollama cargando en frío, generación de imagen/video) no parezca
+  colgada. Confirmado funcionando en vivo.
+- **Selector de tier (Lite/Medio/Hard)**: arriba de la ventana. Cambiar de
+  tier reinicia el backend — confirmado funcionando en vivo (dos reinicios
+  reales observados en el log durante la sesión).
+- **Sidebar**:
+  - Los botones 🖼 "Generar imagen" y 🎬 "Generar video" **ya no existen en
+    la UI** (`Sidebar.TOOLS` vacía a propósito) — no es solo que la tool de
+    atrás esté deshabilitada, Damian pidió explícitamente que no aparezcan
+    ni como opción visible, dado el riesgo de hardware (ver sección 4.5).
+    Antes de sacarlos se había confirmado en vivo que el click de 🎬 sí
+    disparaba `generate_video` correctamente (tool_call real con un prompt
+    propio de Damian, no de una prueba automatizada) — la UI en sí
+    funcionaba bien, el problema nunca fue el wiring. Confirmado con test
+    (`test_sidebar_has_no_utility_buttons_only_voice`) y reinicio en vivo de
+    la ventana: el sidebar ahora solo tiene el botón de voz.
+  - 🎙 activa/desactiva la escucha de voz continua (ver sección 6.1).
+- **Ícono de configuración (⚙)**: diálogo aparte (`ui/settings_window.py`) a
+  propósito — la ventana de chat tiene que quedar "limpia, nada técnica".
+  Prende/apaga `DESKTOP_CONTROL_ENABLED`, `PHONE_SHELL_ENABLED`,
+  `PHONE_CAMERA_ENABLED`, `FS_ALLOW_DELETE`, `BROWSER_HEADLESS` escribiendo
+  directo a `backend/.env`, y reinicia el backend al guardar. **Código
+  revisado y de bajo riesgo (lectura/escritura de `.env` + reinicio, mismo
+  mecanismo ya probado del selector de tier), pero el click real de abrir el
+  diálogo y guardar todavía no se confirmó visualmente en esta sesión.**
 
 ---
 
-## 7. Detalle operativo importante: cómo está corriendo el backend ahora mismo
+## 6. Voz
 
-El proceso actual del backend **no fue arrancado por la tray-app** — se inició directamente (`python run.py` desde una terminal, o en este caso, arrancado por Claude vía `nohup .venv/Scripts/python.exe run.py` redirigido a un log en el scratchpad de la sesión, para poder diagnosticar). Esto es relevante porque:
+### 6.1. PC (`tray-app/voice_listener.py`)
 
-- `tray-app/backend.log` está **desactualizado** — corresponde a un proceso viejo (PID 20524) que ya no existe. No usarlo como fuente de verdad sobre el estado actual.
-- El log real de la sesión actual del backend vive en un archivo temporal del scratchpad de Claude (`.../scratchpad/backend_restart2.log`), **no persistente** — si se cierra esta sesión de Claude o se reinicia la PC, ese archivo puede desaparecer. Si se quiere logging persistente del backend hacia adelante, conviene arrancarlo desde la tray-app (que sí escribe a `tray-app/backend.log` de forma estable) o redirigir manualmente a un archivo dentro del repo.
-- PID actual del backend: **38496** (verificar con `netstat -ano | findstr :8000` si hace falta confirmar que sigue vivo).
+Pipeline: mic (16kHz mono) → `openWakeWord` (modelo custom entrenado con TTS
+en 22 voces/acentos de español, `models/hey_jarvis.onnx`, **no committeado
+en git — necesario para que esto funcione, ver `tray-app/README.md`**) →
+Silero VAD decide cuándo terminó el comando → `faster-whisper` (`medium`,
+`language="es"` fijo) transcribe → `POST /api/chat`.
+
+**Estado:** según indicación del usuario, esta parte está considerada
+cerrada/funcional. **No se validó de forma independiente en esta sesión** —
+no se tocó `voice_listener.py` ni se hizo una prueba de voz en la PC hoy.
+
+### 6.2. Android (`android-app/.../voice/`) — bug real, sin resolver, diagnóstico pausado
+
+Mismo modelo (`hey_jarvis.onnx`, MD5 idéntico al de la PC — confirmado, no es
+un problema de modelo distinto) portado a Kotlin puro sobre ONNX Runtime
+(`OnnxWakeWordDetector.kt` + `WakeWordFeatureBuffers.kt`), sin TFLite.
+
+**Síntoma reportado:** el mismo audio real grabado por el propio micrófono
+del celular (archivos `training_samples/positive_*.wav`, capturados con
+`SampleRecorder.kt`) da **score 1.0 en Python** (pipeline de referencia,
+mismo modelo) pero scoreaba ~0.001–0.15 en vivo en el celular.
+
+**Lo que se descartó, con evidencia dura:**
+- **No es un problema del modelo** — mismo archivo, mismo hash MD5 en PC y
+  Android.
+- **No es un bug de la matemática del port Kotlin** — se corrió el archivo
+  real grabado por el celular a través del código de producción real
+  (`OnnxWakeWordDetector`/`WakeWordFeatureBuffers`, el mismo que usa
+  `VoiceListenerService` en vivo) desde un hook de diagnóstico temporal, y
+  dio **score=1.0000 en el mismo frame exacto** que Python, en dos archivos
+  distintos. Además cada frame se procesó en ~20ms, muy por debajo de los
+  80ms de presupuesto — tampoco es un problema de latencia de inferencia.
+
+**Lo que sigue sin explicación:** en una prueba en vivo posterior, el
+detector SÍ funcionó (score 0.99265, detección y ejecución correctas) sin que
+se supiera qué había cambiado respecto a los intentos fallidos anteriores con
+audio similar. **El diagnóstico quedó pausado en este punto, no resuelto** —
+no se identificó qué distingue un intento en vivo exitoso de uno fallido. El
+hook de diagnóstico temporal (`WakeWordSelfTestReceiver.kt` + el gancho en
+`MainActivity.kt`) se sacó del código antes de publicar el repo, ya cumplió
+su propósito.
+
+**Próximo paso de diagnóstico sugerido** (no hecho todavía): instrumentar
+`VoiceListenerService.kt` con timestamps por frame durante una sesión de
+escucha en vivo real, para ver si hay drops/desincronización del stream de
+`AudioRecord` específicamente en los intentos que fallan.
 
 ---
 
-## 8. Estado de tests y de git
+## 7. Seguridad
 
-**Tests backend:** 18/18 pasan (`cd backend && .venv/Scripts/python.exe -m pytest -q`). Se arreglaron 2 tests que habían quedado rotos por un cambio anterior (agregado de `network_candidates` a `/api/health` sin actualizar `test_smoke.py`/`test_phone_ws_endpoint.py`) — ahora validan la forma de la respuesta en vez de comparar por igualdad exacta con un dict fijo, porque `network_candidates` depende de las interfaces de red de la máquina.
+Ver el detalle completo en `backend/README.md` (sección "Notas de
+seguridad"). Resumen:
 
-**No hay tests para:** `agent.py` (el loop del agente en sí, incluida la nota de estado nueva), `network_info.py`, ni nada del lado Android/tray-app (no hay infraestructura de test en esos dos).
-
-**Working tree:** limpio, todo commiteado. Commits de esta sesión, en orden:
-
-```
-1208bf3  Add PC-side chat window to tray-app; fix health-endpoint test drift
-2734ea4  Document LAN/USB testing success and manual Tailscale install steps
-c078f62  Log WS connect/close/failure reasons in PhoneLinkService
-578e25d  Clarify PC vs. celular scope in tool descriptions for the LLM
-91163d3  Inject live phone-connection status into every agent turn
-4d312f4  Switch to AsyncOpenAI to stop the event loop from blocking on inference
-```
-
-**No commiteado / no aplica:** nada pendiente en el working tree a esta fecha.
-
-**Config actual** (`backend/app/config.py`, valores desde `backend/.env`):
-`HOST=0.0.0.0`, `PORT=8000`, `API_KEY` fijo (confirmado que coincide con el de la app Android tras el fix del bug de tipeo `l`/`I` de una sesión anterior), `LMSTUDIO_BASE_URL=http://localhost:1234/v1`, `FS_ALLOWED_ROOT` = home del usuario, `FS_ALLOW_DELETE=false`, `BROWSER_HEADLESS=false`, `MAX_AGENT_ITERATIONS=10`, `PHONE_TOOL_TIMEOUT=30s`.
+- El backend no valida quién está del otro lado más allá del Bearer token —
+  la barrera principal es que solo es alcanzable por la tailnet/LAN del
+  usuario.
+- Log de auditoría persistente (`backend/audit.log`, JSON por línea) de cada
+  tool call de celular y de escritorio.
+- `desktop_*` y el Accessibility Service del celular son **control total e
+  invasivo**, sin sandboxing posible — decisión consciente del usuario,
+  ambos apagables por variable de entorno sin tocar código.
+- `phone_run_command` es ejecución de shell real (código arbitrario) vía
+  Termux — el nivel más invasivo del proyecto.
+- Blocklists de comandos/lanzamientos obviamente destructivos en ambos lados
+  — mitigación de "evitar el desastre obvio" por matching de texto, **no un
+  sandbox real ni una garantía de seguridad completa**.
+- TLS (`wss://`/`https://`) preparado en el backend pero apagado por
+  default — la conexión viaja en texto plano salvo que ya esté sobre
+  Tailscale (cifrado por WireGuard a nivel de transporte).
+- API key del celular cifrado con AES-256-GCM en Android Keystore (no texto
+  plano).
 
 ---
 
-## 9. Contexto, decisiones y lecciones operativas
+## 8. Resumen ejecutivo honesto — qué funciona confirmado vs. qué no
 
-*(Resumen narrativo aportado por el usuario.)*
+| Área | Estado |
+|---|---|
+| Chat PC↔backend (texto) | ✅ Confirmado en vivo, incluido roundtrip completo con Ollama |
+| Selector de tier (Lite/Medio/Hard) | ✅ Confirmado en vivo (reinicios reales observados) |
+| Indicador de "pensando..." | ✅ Confirmado en vivo |
+| `generate_image`/`generate_video` | 🔴 **DESHABILITADAS por precaución de hardware** — la PC se apagó físicamente (no un crash de software) al menos dos veces coincidiendo al segundo con estas tools. Ver sección 4.5. |
+| Botones 🖼/🎬 del sidebar | 🔴 **Removidos de la UI a pedido de Damian** (no solo deshabilitados) — el wiring había sido confirmado en vivo (🎬 disparaba `generate_video` bien) antes de sacarlos. Confirmado con test + reinicio en vivo de la ventana. |
+| Ícono de configuración ⚙ (click en la UI) | ⚠️ Pendiente de confirmación visual |
+| Control de celular: tap/swipe/type/read_screen/SAF | ✅ Confirmado en dispositivo real |
+| `phone_run_command` (Termux) | ❌ Error activo ("app is in background uid null"), sin diagnosticar |
+| `phone_take_photo`/`phone_record_video` | ❌ Errores activos (timeout, "Camera is closed"), sin diagnosticar |
+| `desktop_*` (control de PC) | ⚠️ Tests unitarios pasan, sin validar contra una GUI real |
+| `jarvis_reflect` | ⚠️ Tests unitarios pasan, sin validar en una conversación real de punta a punta |
+| Voz PC (`voice_listener.py`) | ⚠️ Según el usuario, funcional — no validado por Claude esta sesión |
+| Voz Android (wake word) | ❌ Bug real confirmado, diagnóstico pausado sin causa raíz identificada |
+| Instalador de un click | ⚠️ Recién escrito, syntax verificado, no corrido de punta a punta |
 
-### Qué es y por qué
+---
 
-Damian quiere comandar su LLM local ("Jarvis", modelo de 30B servido por LM Studio en su PC) desde el celular, con capacidad real de EJECUTAR ACCIONES — no solo chatear — tanto en la PC como en el celular Android, desde cualquier lugar (no solo en casa).
+## 9. Licencia
 
-### Decisiones de arquitectura (todas confirmadas explícitamente por el usuario)
-
-- Modelo: 30B parámetros vía LM Studio (localhost:1234, API compatible OpenAI).
-- Backend: Python/FastAPI en la PC, con framework de tools que el LLM invoca. Actúa de router: cada tool tiene un `target` (`pc` o `phone`).
-- Control del celular: **Accessibility Service con control TOTAL de pantalla** (no la opción acotada de Intents estándar). El usuario confirmó explícitamente que entiende el riesgo — con este permiso activo, Jarvis puede leer y tocar CUALQUIER app visible en pantalla, incluidas banca, WhatsApp, 2FA. Fue una decisión consciente, preguntada dos veces y confirmada las dos ("full invasiva").
-- Transporte celular↔backend: WebSocket saliente desde el celular (no un servidor HTTP en el celu, por las limitaciones de Doze/background de Android), mantenido por un foreground service con notificación persistente.
-- Filesystem del celu: Storage Access Framework (SAF), sandboxeado a una carpeta que el usuario elige una vez.
-- Acceso remoto ("desde cualquier lugar"): Tailscale (VPN mesh privada) en vez de exponer el backend a internet directamente. Para cuando está en la misma red física, el backend también detecta y prioriza conexión directa por LAN o por el hotspot de la PC (pedido explícito del usuario: "mantengamos que se puedan conectar a internet pero también que uno tenga hotspot, lo tendrá la pc").
-- Control bidireccional: el usuario pidió explícitamente poder comandar al celular desde la PC Y a la PC desde el celular. Esto llevó a agregar una ventana de chat en el tray-app (antes solo existía el chat en la app Android).
-- Auth: Bearer token simple compartido, suficiente porque el backend nunca queda expuesto a internet directo (vive detrás de Tailscale/LAN).
-
-### Pasos manuales pendientes (ninguno automatizable, por diseño de seguridad de Windows/Android — ya se intentó y se confirmó el límite)
-
-1. **Instalar y loguear Tailscale en la PC** — el instalador pide UAC (aprobación humana obligatoria), y el login requiere credenciales reales en el navegador. Tampoco se pudo automatizar.
-2. **Instalar Tailscale en el celular** (Play Store) y loguearse con la misma cuenta.
-3. Cargar la IP de Tailscale de la PC en la app Android (reemplazando la IP LAN actual) una vez que Tailscale esté activo.
-4. Determinar el package name real de la app Calculadora en este Moto G72 (no es `com.android.calculator2`; puede ser `com.google.android.calculator` u otro de Motorola) — Jarvis ya intenta compensar leyendo pantalla cuando falla, pero sería bueno confirmarlo.
-
-### Bugs encontrados y resueltos durante esta sesión (cronológico)
-
-1. Múltiples sesiones de código corriendo en paralelo sobre la misma carpeta dejaron procesos zombie (gradlew, java, sdkmanager, hasta un `claude.exe` viejo) que corrompían archivos y causaban cuelgues falsos — resuelto matando los procesos y evitando paralelismo sobre el mismo directorio de ahí en más.
-2. Instalación del JDK vía MSI se colgaba esperando UAC — resuelto usando JDK portátil (zip) sin necesitar admin.
-3. `sdkmanager --licenses` interactivo se colgaba — resuelto escribiendo los archivos de licencia a mano.
-4. Playwright no tenía el navegador Chromium descargado (`playwright install` pendiente) — resuelto.
-5. **Bug de contaminación de historial**: el modelo dijo una vez "no tengo acceso al celular" (en un momento en que probablemente no lo tenía), y como el historial de conversación persiste para siempre sin corrección, el modelo repetía esa afirmación falsa en cada turno siguiente, ignorando que las tools del celu SÍ estaban disponibles y el celu SÍ estaba conectado. Fix: inyectar el estado real de `is_phone_connected()` como nota de sistema fresca en cada turno, no depender del `SYSTEM_PROMPT` fijo ni del historial.
-6. **Bug de arquitectura más serio**: el cliente de OpenAI hacia LM Studio era síncrono (`OpenAI`, no `AsyncOpenAI`) y se llamaba sin `await`/executor dentro de una función async — cada respuesta del modelo (20-70s con este modelo de 30B) congelaba TODO el servidor (incluida la conexión WebSocket del celu), causando reconexiones en cadena y la apariencia de inestabilidad de red que en realidad era el backend bloqueado. Fix: cambiar a `AsyncOpenAI`. Confirmado con prueba real de concurrencia que ya no se congela.
-
-### Lecciones operativas (para quien retome esto)
-
-- Las herramientas de pregunta interactiva (AskUserQuestion) en sesiones de código quedan bloqueadas para siempre si se usan — las respuestas por texto plano no llegan a ese widget. Nunca usarlas en esta sesión.
-- No correr múltiples sesiones de código en paralelo sobre el mismo directorio de proyecto — causa corrupción real por procesos zombie.
-- Los pasos que requieren UAC de Windows, login de cuentas, o toggles de seguridad de Android (Accessibility Service, Depuración USB) son inherentemente manuales — no vale la pena reintentar automatizarlos, hay que documentarlos como tal y seguir.
+MIT — ver `LICENSE`.

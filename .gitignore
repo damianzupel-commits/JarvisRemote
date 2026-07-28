@@ -15,6 +15,32 @@ test-results/
 
 # Tray app
 tray-app/backend.log
+tray-app/voice.log
+# Grabaciones reales de voz juntadas para diagnosticar/reentrenar el wake word
+# (ver SampleRecorder.kt) -- audio real de Damian, nunca se publica.
+tray-app/voice_debug/
+
+# ComfyUI (generate_image/generate_video): log de stdout/stderr del subproceso,
+# se regenera solo (ver _comfyui_shared.py).
+backend/comfyui.log
+
+# Notas internas del agente (backend/app/tools/reflect.py) -- pueden contener
+# preferencias y detalles personales del usuario, no son para publicar.
+backend/reflections.jsonl
+
+# Vault de notas Obsidian (backend/app/obsidian/) -- contenido personal del
+# usuario y del agente, igual criterio que reflections.jsonl arriba.
+backend/obsidian_vault/
+
+# Cache de índices de codebase (backend/app/codebase/store.py) -- se
+# regenera solo, y puede referenciar rutas/proyectos privados del usuario.
+backend/data/
+
+# Artefactos de build/test sueltos en la raíz -- no son parte del código fuente
+# (el APK se genera con android-app/deploy.ps1; el .onnx es un duplicado de
+# tray-app/models/hey_jarvis.onnx).
+/installed.apk
+/installed_hey_jarvis.onnx
 
 # Log de auditoría estructurado (backend/app/audit_log.py), rota por tamaño
 backend/audit.log*

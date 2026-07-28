@@ -53,6 +53,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.jarvisremote.app.phone.AccessibilityUtils
 import com.jarvisremote.app.phone.PhoneLinkService
 import com.jarvisremote.app.phone.TermuxCommandRunner
+import com.jarvisremote.app.voice.VoiceListenerService
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +61,9 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
     val settings by viewModel.settings.collectAsState()
     val testState by viewModel.testState.collectAsState()
     val phoneLinkStatus by viewModel.phoneLinkStatus.collectAsState()
+    val voiceState by viewModel.voiceState.collectAsState()
+    val recordingLabel by viewModel.recordingLabel.collectAsState()
+    val lastSavedSample by viewModel.lastSavedSample.collectAsState()
 
     var url by rememberSaveable(settings.backendUrl) { mutableStateOf(settings.backendUrl) }
     var apiKey by rememberSaveable(settings.apiKey) { mutableStateOf(settings.apiKey) }
@@ -78,6 +82,12 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
                 android.content.pm.PackageManager.PERMISSION_GRANTED,
         )
     }
+    var micPermissionGranted by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED,
+        )
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -88,6 +98,10 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
                 cameraPermissionGranted = androidx.core.content.ContextCompat.checkSelfPermission(
                     context,
                     Manifest.permission.CAMERA,
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                micPermissionGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECORD_AUDIO,
                 ) == android.content.pm.PackageManager.PERMISSION_GRANTED
             }
         }
@@ -100,6 +114,9 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted -> cameraPermissionGranted = granted }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted -> micPermissionGranted = granted }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -307,6 +324,94 @@ fun SettingsScreen(onSaved: () -> Unit, viewModel: SettingsViewModel = viewModel
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
+            }
+
+            Text("Voz — \"hey Jarvis\"", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Escucha continua para hablarle a Jarvis sin tocar el celular: decí " +
+                    "\"hey Jarvis\" y tu pedido. La detección de la frase corre 100% en el " +
+                    "celular (openWakeWord); la transcripción usa el reconocedor del sistema " +
+                    "(on-device si el celular lo soporta). Tras un reinicio del celular hay " +
+                    "que abrir la app para reactivarla (restricción de Android para servicios " +
+                    "de micrófono, no un bug).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                "Micrófono: " + if (micPermissionGranted) "otorgado" else "no otorgado",
+                color = if (micPermissionGranted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            OutlinedButton(
+                onClick = { micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                enabled = !micPermissionGranted,
+            ) {
+                Text("Habilitar micrófono")
+            }
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Escucha de voz continua", style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = settings.voiceListenerEnabled,
+                    enabled = micPermissionGranted,
+                    onCheckedChange = { enabled ->
+                        if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+                        viewModel.setVoiceListenerEnabled(enabled)
+                    },
+                )
+            }
+            if (settings.voiceListenerEnabled) {
+                Text(
+                    "Estado: " + when (voiceState) {
+                        VoiceListenerService.VoiceState.LOADING -> "cargando modelos..."
+                        VoiceListenerService.VoiceState.LISTENING -> "escuchando \"hey Jarvis\""
+                        VoiceListenerService.VoiceState.TRANSCRIBING -> "transcribiendo tu pedido..."
+                        VoiceListenerService.VoiceState.PROCESSING -> "procesando con Jarvis..."
+                        VoiceListenerService.VoiceState.MIC_UNAVAILABLE -> "micrófono ocupado, reintentando..."
+                        VoiceListenerService.VoiceState.ERROR -> "error (ver notificación)"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            HorizontalDivider()
+            Text("Grabar muestras de voz (para entrenar el modelo)", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Herramienta puntual, no para uso diario: graba tu voz real para mejorar la " +
+                    "detección de \"hey Jarvis\" (el modelo actual se entrenó solo con voces " +
+                    "sintéticas). Grabá primero diciendo \"hey Jarvis\" ~15-20 veces seguidas, " +
+                    "con una pausa corta entre cada una. Después grabá un segundo audio hablando " +
+                    "normal (cualquier tema, como si charlaras) durante otro minuto más o menos.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        if (recordingLabel == "positive") viewModel.stopSampleRecording()
+                        else viewModel.startSampleRecording("positive")
+                    },
+                    enabled = micPermissionGranted && recordingLabel != "negative",
+                ) {
+                    Text(if (recordingLabel == "positive") "Parar (hey Jarvis)" else "Grabar \"hey Jarvis\"")
+                }
+                OutlinedButton(
+                    onClick = {
+                        if (recordingLabel == "negative") viewModel.stopSampleRecording()
+                        else viewModel.startSampleRecording("negative")
+                    },
+                    enabled = micPermissionGranted && recordingLabel != "positive",
+                ) {
+                    Text(if (recordingLabel == "negative") "Parar (habla normal)" else "Grabar habla normal")
+                }
+            }
+            if (recordingLabel != null) {
+                Text("🔴 Grabando...", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
+            lastSavedSample?.let {
+                Text("Guardado: $it", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

@@ -8,6 +8,8 @@ import com.jarvisremote.app.data.JarvisSettings
 import com.jarvisremote.app.data.SettingsRepository
 import com.jarvisremote.app.data.describeError
 import com.jarvisremote.app.phone.PhoneLinkService
+import com.jarvisremote.app.voice.SampleRecorder
+import com.jarvisremote.app.voice.VoiceListenerService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -48,6 +50,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    val voiceState: StateFlow<VoiceListenerService.VoiceState> = VoiceListenerService.state
+
+    /**
+     * El start acá es válido para Android 14+ porque siempre llega desde el toggle
+     * de Ajustes con la app en primer plano (la única forma permitida de arrancar
+     * un FGS de micrófono). El permiso RECORD_AUDIO ya viene verificado por la UI.
+     */
+    fun setVoiceListenerEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setVoiceListenerEnabled(enabled)
+            val app = getApplication<Application>()
+            if (enabled) VoiceListenerService.start(app) else VoiceListenerService.stop(app)
+        }
+    }
+
     private val _testState = MutableStateFlow<ConnectionTestState>(ConnectionTestState.Idle)
     val testState: StateFlow<ConnectionTestState> = _testState.asStateFlow()
 
@@ -72,6 +89,30 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             settingsRepository.saveBackendConfig(url, apiKey)
             onSaved()
+        }
+    }
+
+    // --- Grabación de muestras reales para reentrenar el modelo de wake word ---
+    // Ver docstring de SampleRecorder: herramienta de una sola vez, no una feature
+    // permanente. `recordingLabel` es null cuando no está grabando, "positive" o
+    // "negative" mientras graba (para saber qué botón deshabilitar en la UI).
+    private val sampleRecorder = SampleRecorder(application)
+    private val _recordingLabel = MutableStateFlow<String?>(null)
+    val recordingLabel: StateFlow<String?> = _recordingLabel.asStateFlow()
+    private val _lastSavedSample = MutableStateFlow<String?>(null)
+    val lastSavedSample: StateFlow<String?> = _lastSavedSample.asStateFlow()
+
+    fun startSampleRecording(label: String) {
+        if (sampleRecorder.isRecording) return
+        sampleRecorder.start(label)
+        _recordingLabel.value = label
+    }
+
+    fun stopSampleRecording() {
+        viewModelScope.launch {
+            val file = sampleRecorder.stop()
+            _recordingLabel.value = null
+            _lastSavedSample.value = file?.name
         }
     }
 }

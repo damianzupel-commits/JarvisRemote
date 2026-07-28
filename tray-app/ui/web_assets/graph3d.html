@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Jarvis graph 3d</title>
+<style>
+  html, body, #graph { margin: 0; padding: 0; width: 100%; height: 100%; background: #15151a; overflow: hidden; }
+</style>
+</head>
+<body>
+<div id="graph"></div>
+<!-- qwebchannel.js lo sirve QtWebChannel internamente vía qrc:// -- no hace
+     falta vendorizarlo, siempre está disponible para cualquier página que
+     use QWebChannel, la cargue como la cargue Qt. -->
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<script src="3d-force-graph.min.js"></script>
+<script>
+  let bridge = null;
+  new QWebChannel(qt.webChannelTransport, function (channel) {
+    bridge = channel.objects.bridge;
+  });
+
+  const elem = document.getElementById('graph');
+  const Graph = ForceGraph3D()(elem)
+    .backgroundColor('#15151a')
+    .nodeLabel(n => n.label)
+    .nodeColor(n => n.color)
+    .nodeRelSize(4.5)
+    .linkColor(() => 'rgba(190,190,200,0.35)')
+    .linkOpacity(0.6)
+    .linkWidth(0.6)
+    // Encuadra la cámara sola apenas la simulación de fuerzas se asienta --
+    // sin esto la cámara queda en la posición default (pensada para un
+    // puñado de nodos) y un grafo de un repo real (cientos de nodos) se ve
+    // como una pelotita diminuta perdida en el centro de la pantalla.
+    .onEngineStop(() => Graph.zoomToFit(600, 60))
+    .onNodeClick(node => {
+      if (bridge) bridge.onNodeClick(node.id);
+      // Vuela la cámara hacia el nodo clickeado en vez de teletransportarla,
+      // así se mantiene la orientación y es más fácil seguir dónde uno está
+      // parado en el grafo -- igual que hace 3d-force-graph en sus propios
+      // demos de "click to focus".
+      const distance = 90;
+      const distRatio = 1 + distance / Math.hypot(node.x || 1e-6, node.y || 1e-6, node.z || 1e-6);
+      Graph.cameraPosition(
+        { x: node.x * distRatio, y: node.y * distRatio, z: node.z * distRatio },
+        node,
+        800
+      );
+    });
+
+  window.addEventListener('resize', () => {
+    Graph.width(elem.clientWidth).height(elem.clientHeight);
+  });
+
+  // Punto de entrada que llama Python (graph_view.py) cada vez que hay datos
+  // nuevos o cambia el filtro -- reemplaza el grafo completo.
+  window.setGraphData = function (data) {
+    Graph.graphData(data);
+  };
+</script>
+</body>
+</html>

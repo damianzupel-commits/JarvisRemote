@@ -28,6 +28,9 @@ def test_pc_tools_default_to_pc_target():
     tools = get_tools()
     assert tools["fs_list_dir"].target == "pc"
     assert tools["browser_open"].target == "pc"
+    assert tools["jarvis_reflect"].target == "pc"
+    assert tools["generate_video"].target == "pc"
+    assert tools["generate_image"].target == "pc"
 
 
 def test_openai_tool_schemas_expose_single_flat_list():

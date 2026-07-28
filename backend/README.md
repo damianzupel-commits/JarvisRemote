@@ -10,7 +10,6 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements-dev.txt   # incluye requirements.txt + pytest/httpx
-playwright install chromium
 copy .env.example .env
 ```
 
@@ -34,6 +33,20 @@ Editá `.env`:
 - `TLS_ENABLED`: sirve `https://`/`wss://` en vez de texto plano. **Preparado
   pero apagado por default** — ver `backend/certs/README.md` antes de tocar
   esto, activarlo a lo loco corta el acceso de la app.
+- `COMFYUI_DIR` / `COMFYUI_PYTHON_PATH` / `COMFYUI_BASE_URL`: solo hacen falta
+  para `generate_image`/`generate_video`. Apuntan a tu instalación portable de
+  ComfyUI y al intérprete Python que la corre — en GPUs AMD no soportadas
+  oficialmente por ROCm (ver nota más abajo) puede hacer falta un venv aparte
+  al de la instalación portable.
+
+Las tools `browser_*` (ver `app/tools/browser.py`) usan el Microsoft Edge que
+ya viene instalado en Windows (`channel="msedge"` de Playwright), no un
+Chromium aparte para descargar — no hace falta correr `playwright install`.
+Se eligió así porque el Chromium propio de Playwright no viene firmado, y en
+sistemas con cierto software de seguridad activo eso puede hacer fallar su
+arranque en Windows con `BrowserType.launch: spawn UNKNOWN` (Windows no logra
+activar el manifiesto interno del ejecutable). El Edge del sistema sí está
+firmado y no tiene ese problema.
 
 ## Correr
 
@@ -102,6 +115,59 @@ pytest
   por tamaño en `backend/audit.log`, gitignored) de cada tool call de celular
   y de escritorio, aparte del logging general de texto libre. Ver sección de
   seguridad.
+- `app/tools/_comfyui_shared.py` — infraestructura común de `generate_image` y
+  `generate_video` (no es una tool en sí): arranque/parada del proceso de
+  ComfyUI (stdout/stderr a `backend/comfyui.log`, gitignored), coordinación de
+  VRAM con Ollama (se descarga el modelo de texto antes de generar y se
+  recarga al terminar, ya que compiten por la misma GPU), y el ciclo
+  encolar-esperar-extraer resultado contra la API HTTP de ComfyUI
+  (`127.0.0.1:8188` por default).
+- `app/tools/image_gen.py` — `generate_image`: imagen a partir de texto con
+  Flux.1 Schnell (GGUF Q4_K_S) vía ComfyUI. Rápido (una sola pasada de
+  KSampler, 4 pasos), pero corre en la misma GPU ajustada de VRAM que el resto
+  — ver nota de estabilidad de ComfyUI en seguridad/notas conocidas más abajo.
+  **Deshabilitada, no importada en `tools/__init__.py` (ver ahí el porqué).**
+- `app/tools/video_gen.py` — `generate_video`: clip corto (1 a 5s) con Wan 2.2
+  (workflow de dos expertos, high/low noise) vía ComfyUI. Lento (varios
+  minutos, medido entre ~4.3 y ~14 min para 1s de clip) y con el mismo
+  encolar-esperar-extraer de `_comfyui_shared.py`. **Deshabilitada, no
+  importada en `tools/__init__.py` (ver ahí el porqué).**
+- `app/tools/reflect.py` — `jarvis_reflect`: memoria de reflexión del propio
+  agente (`action="save"`/`"query"`), un JSONL append-only
+  (`backend/reflections.jsonl`, gitignored — puede contener notas personales
+  del usuario) con búsqueda simple por superposición de palabras. Para que el
+  modelo recuerde decisiones no triviales entre conversaciones que no
+  comparten historial.
+- `app/codebase/` — indexado estructural de repos: `languages.py` (detección
+  por extensión + mapeo a gramáticas de tree-sitter), `symbol_queries.py`
+  (una query de tree-sitter por lenguaje soportado), `indexer.py` (recorre el
+  árbol respetando `.gitignore`, extrae funciones/clases/imports vía
+  tree-sitter o, si el lenguaje no tiene grammar soportada, un fallback
+  regex genérico), `store.py` (cachea el índice en JSON bajo
+  `settings.codebase_index_dir`, gitignored). Módulo interno, no envuelve
+  ningún proceso externo.
+- `app/tools/codebase.py` — `codebase_index_project`, `codebase_search_symbol`,
+  `codebase_file_outline`. Solo lectura, no sandboxeadas a `FS_ALLOWED_ROOT`
+  (el usuario puede pedir analizar cualquier repo del disco).
+- `app/routers/codebase.py` — `GET /api/codebase/index` y `/recent`, para la
+  pestaña "Codebase" de la ventana de PC (`tray-app/ui/codebase_view.py`).
+- `app/obsidian/vault.py` — vault de notas estilo Obsidian: archivos Markdown
+  reales con frontmatter YAML, en carpetas separadas por autor
+  (`obsidian_vault/jarvis/`, `obsidian_vault/human/`, gitignored). Evolución
+  más rica de `jarvis_reflect` (que queda intacto, para notas de una sola
+  línea).
+- `app/tools/obsidian.py` — `obsidian_save_note` (siempre autor "jarvis" --
+  la tool no expone el parámetro `author`, así el modelo no puede escribir
+  notas humanas), `obsidian_search_notes`, `obsidian_list_notes`.
+- `app/routers/obsidian.py` — CRUD de notas humanas para la pestaña
+  "Obsidian" de la ventana de PC (`tray-app/ui/obsidian_view.py`); el POST
+  está fijado a autor "human", es el único punto de escritura de la UI.
+- `app/tools/reflect.py` — `jarvis_reflect`: memoria de reflexión del propio
+  agente (`action="save"`/`"query"`), un JSONL append-only
+  (`backend/reflections.jsonl`, gitignored — puede contener notas personales
+  del usuario) con búsqueda simple por superposición de palabras. Para que el
+  modelo recuerde decisiones no triviales entre conversaciones que no
+  comparten historial.
 - `app/main.py` — endpoints `GET /api/health` y `POST /api/chat`.
 
 ## Agregar una tool nueva
@@ -112,6 +178,47 @@ pytest
 
 No hace falta tocar `agent.py` ni `main.py`: el agente arma los schemas y despacha
 las tool calls automáticamente contra el registry.
+
+## Limitaciones conocidas
+
+- **`generate_image`/`generate_video` están deshabilitadas por precaución de
+  hardware, no reactivar sin investigar primero.** El 2026-07-27 la PC se
+  apagó **físicamente** (no un crash de proceso) al menos dos veces,
+  coincidiendo al segundo con el arranque de una de estas dos tools
+  (confirmado cruzando `backend.log` contra el Event Log de Windows, Event
+  ID 41/6008), más un patrón de apagados similares en días previos. Se
+  comentaron los imports en `app/tools/__init__.py` (código intacto,
+  reactivable con dos líneas) hasta entender si es térmico, de fuente de
+  poder, o un crash de driver forzando un reset de hardware. Ver
+  `INFORME_COMPLETO.md`, sección 4.5, para el detalle completo con
+  timestamps y evidencia.
+- **ComfyUI puede crashear a nivel nativo (sin traceback de Python) si se le
+  piden dos generaciones seguidas o en paralelo**, confirmado en la práctica
+  con `backend/comfyui.log`: la primera generación termina bien (el warning
+  `MIOpen: CK grouped conv library not found for device gfx1031` es ruido,
+  no fatal — esa corrida completó igual), pero al arrancar la siguiente
+  generación justo después el proceso muere sin ningún error ni excepción
+  Python, solo silencio. Causa más probable: `gfx1031` (RX 6700 XT) no está
+  oficialmente soportado por ROCm (ver el comentario de `COMFYUI_PYTHON_PATH`
+  en `config.py`), y esta GPU ya tiene un historial de access violations reales
+  con ciertos builds de PyTorch+ROCm.
+  - **Mitigado, no solucionado** (no se puede arreglar un crash de driver
+    desde Python): `_comfyui_shared.wait_for_result` ahora corta la espera en
+    ~15s con un error claro tras 3 fallas de conexión seguidas al pollear
+    `/history`, en vez de colgar el chat hasta `COMFYUI_GENERATION_TIMEOUT_IMAGE`
+    (default 600s) esperando una respuesta que ya no va a llegar.
+  - También se encontró y arregló un bug real aparte: si el proceso anterior
+    quedaba zombie (crasheado pero sin liberar el lock de SQLite),
+    `start_comfyui_process()` fallaba al arrancar uno nuevo con `Could not
+    acquire lock on database 'comfyui.db'`. Ahora mata cualquier proceso de
+    ComfyUI que haya quedado vivo pero sin responder por HTTP antes de
+    arrancar uno nuevo.
+  - **Recomendación práctica**: evitar pedirle a Jarvis dos
+    `generate_image`/`generate_video` seguidos sin esperar a que el primero
+    termine — un ciclo único confirmado end-to-end (HTTP 200 + archivo real
+    en disco) funciona bien.
+  - `start_comfyui_process()` manda stdout/stderr de ComfyUI a
+    `backend/comfyui.log` (gitignored) para diagnosticar el próximo crash.
 
 ## Notas de seguridad
 

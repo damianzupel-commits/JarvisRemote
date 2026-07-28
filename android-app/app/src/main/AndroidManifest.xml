@@ -27,6 +27,18 @@
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
     <!--
+    Escucha continua de "hey Jarvis" (ver voice/VoiceListenerService.kt).
+    RECORD_AUDIO es "dangerous" y se pide en runtime desde Ajustes, igual que
+    la cámara. FOREGROUND_SERVICE_MICROPHONE es obligatorio para declarar el
+    service con foregroundServiceType="microphone" apuntando a API 34.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Vibración como confirmación de wake word (nivel normal, no requiere grant). -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!--
     Necesario para que PackageManager.getLaunchIntentForPackage funcione con
     cualquier app instalada (phone_open_app): a partir de Android 11, un paquete
     solo es "visible" para otro si hay una declaración <queries> que lo cubra.
@@ -99,6 +111,18 @@
             android:exported="false" />
 
         <!--
+        Escucha continua de "hey Jarvis" (wake word on-device + SpeechRecognizer).
+        Tipo "microphone": Android 14+ solo permite arrancarlo con la app visible
+        (se arranca desde el toggle de Ajustes) y NUNCA desde BOOT_COMPLETED — por
+        eso BootReceiver no lo levanta y tras un reinicio hay que abrir la app una
+        vez para reactivarlo. Ver el docstring de VoiceListenerService.
+        -->
+        <service
+            android:name=".voice.VoiceListenerService"
+            android:foregroundServiceType="microphone"
+            android:exported="false" />
+
+        <!--
         Solo recibe el resultado asincrónico de un comando RUN_COMMAND corrido en
         Termux, vía el PendingIntent que le manda TermuxCommandRunner. No exportado:
         Termux invoca el PendingIntent directamente (identidad a nivel de SO), no
@@ -115,5 +139,6 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
     </application>
 </manifest>

@@ -1,7 +1,7 @@
 # JarvisRemote
 
 Un asistente de IA **local** (no depende de ningún servicio en la nube — corre
-enteramente en tu propia PC vía [LM Studio](https://lmstudio.ai)) al que le podés
+enteramente en tu propia PC vía [Ollama](https://ollama.com)) al que le podés
 dar órdenes desde tu celular o desde tu PC, y que puede **ejecutar acciones
 reales** en ambos dispositivos: no solo chatea, controla.
 
@@ -32,6 +32,17 @@ reales** en ambos dispositivos: no solo chatea, controla.
   internet: la conexión celular↔PC viaja por [Tailscale](https://tailscale.com)
   (VPN mesh privada), con failover automático a la red local (WiFi/hotspot)
   cuando ambos dispositivos están cerca, para menor latencia.
+- **Análisis de codebases**: le podés pedir que indexe cualquier repo del
+  disco -- detecta automáticamente los lenguajes (vía
+  [tree-sitter](https://tree-sitter.github.io/tree-sitter/)) y construye un
+  mapa estructural completo (archivos, funciones, clases, imports). Tiene su
+  propia pestaña "Codebase" en la ventana de PC, con el árbol coloreado por
+  lenguaje.
+- **Vault de notas estilo Obsidian**: memoria propia del agente además del
+  historial de chat -- notas en Markdown real (frontmatter YAML, abribles con
+  Obsidian de verdad) con autoría separada entre las que escribe Jarvis y las
+  que escribís vos. Pestaña "Obsidian" en la ventana de PC, coloreada por
+  autor.
 - **Roadmap**: integración con [Home Assistant](https://www.home-assistant.io)
   como hub central para que Jarvis controle dispositivos smart-home,
   impresión 3D, y builds propios (ESP32/Arduino) vía ESPHome — ver el informe
@@ -43,7 +54,7 @@ reales** en ambos dispositivos: no solo chatea, controla.
 
 Tres componentes:
 
-- **`backend/`** — Python + FastAPI. Habla con LM Studio (API compatible con
+- **`backend/`** — Python + FastAPI. Habla con Ollama (API compatible con
   OpenAI), corre el loop del agente (tool calling), y expone `POST /api/chat`
   y `WS /ws/phone` — ambos autenticados con un Bearer token.
 - **`tray-app/`** — Python + pystray. Administra el backend como subproceso
@@ -57,12 +68,28 @@ de Tailscale (o en la LAN local), y todas las requests requieren el Bearer
 token. Ver el diagrama y el [informe completo](INFORME_COMPLETO.md) para el
 detalle de cada pieza.
 
-## Instalación rápida
+## Instalación
 
-Guía resumida — para el detalle completo (Termux, Tailscale, compilar la app
-Android sin Android Studio, etc.) ver el [informe completo](INFORME_COMPLETO.md)
-y el README de cada componente (`backend/README.md`, `tray-app/README.md`,
-`android-app/README.md`).
+### Con un comando (backend + tray-app, PC solamente)
+
+```powershell
+.\install.ps1
+```
+
+Detecta tu hardware, instala/verifica Ollama, baja y arma el modelo de texto
+del tier que corresponda (con el template de tool-calling corregido — ver
+`installer/`), y deja `backend/.env` + los venvs de `backend/` y `tray-app/`
+listos. Es idempotente: correrlo de nuevo no reinstala ni pisa lo que ya
+tenías. **No cubre** ComfyUI (generate_image/generate_video) ni la app
+Android — ver el detalle de qué automatiza y qué no en el header del propio
+script.
+
+### Manual, paso a paso
+
+Para el detalle completo (Termux, Tailscale, compilar la app Android sin
+Android Studio, ComfyUI para generate_image/generate_video, etc.) ver el
+[informe completo](INFORME_COMPLETO.md) y el README de cada componente
+(`backend/README.md`, `tray-app/README.md`, `android-app/README.md`).
 
 ```bash
 # 1. Backend
@@ -70,12 +97,13 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-playwright install chromium
 copy .env.example .env    # completar API_KEY, HOST (tu IP de Tailscale), etc.
 python run.py
 
-# 2. LM Studio: cargar un modelo con soporte de tool calling (y de visión, si
-#    querés que Jarvis "vea") y arrancar su servidor local (puerto 1234 default).
+# 2. Ollama: bajar un modelo con soporte de tool calling (y de visión, si
+#    querés que Jarvis "vea", ej. Qwen3-VL) y apuntar LMSTUDIO_MODEL a su
+#    nombre en `ollama list`. Ver installer/ollama/*.Modelfile si tu modelo
+#    tiene problemas de tool-calling con el template default de Ollama.
 
 # 3. Tray app (opcional, recomendado): supervisa el backend en vez de correrlo suelto.
 cd tray-app

@@ -2,3 +2,13 @@ pystray>=0.19
 pillow>=10.0
 requests>=2.31
 python-dotenv>=1.0
+# Ventana principal (ver ui/main_window.py) -- reemplaza la vieja de Tkinter.
+# El paquete PySide6 trae PySide6_Addons como dependencia, que incluye
+# QtWebEngineWidgets/QtWebChannel -- los usa ui/graph_view.py (grafo 3D
+# embebido, ver web_assets/graph3d.html) sin necesitar un paquete aparte.
+PySide6>=6.7
+# Escucha de voz continua (ver voice_listener.py)
+openwakeword>=0.6
+faster-whisper>=1.0
+sounddevice>=0.4
+numpy>=1.26

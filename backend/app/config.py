@@ -79,6 +79,56 @@ class Settings:
     tls_cert_path: str = os.getenv("TLS_CERT_PATH", str(Path(__file__).resolve().parent.parent / "certs" / "cert.pem"))
     tls_key_path: str = os.getenv("TLS_KEY_PATH", str(Path(__file__).resolve().parent.parent / "certs" / "key.pem"))
 
+    # Archivo donde `jarvis_reflect` persiste reflexiones/decisiones abstraídas
+    # (ver app/tools/reflect.py) — un JSONL append-only, no pasa por el sandbox
+    # de FS_ALLOWED_ROOT porque es estado interno del backend, no un archivo
+    # del usuario.
+    reflections_path: str = os.getenv(
+        "REFLECTIONS_PATH", str(Path(__file__).resolve().parent.parent / "reflections.jsonl")
+    )
+
+    # generate_video (ver app/tools/video_gen.py): dónde vive la instalación
+    # portable de ComfyUI y en qué URL escucha su API HTTP. Default apunta a la
+    # instalación de este equipo -- en otra máquina hay que ajustar COMFYUI_DIR
+    # en el .env.
+    comfyui_dir: str = os.getenv("COMFYUI_DIR", r"E:\ComfyUI\ComfyUI_windows_portable")
+    comfyui_base_url: str = os.getenv("COMFYUI_BASE_URL", "http://127.0.0.1:8188")
+    comfyui_startup_timeout: float = float(os.getenv("COMFYUI_STARTUP_TIMEOUT", "240"))
+    # El Python embebido de la instalación portable (python_embeded/) trae un build
+    # de PyTorch+ROCm que crashea (access violation real, reproducido con
+    # torch.cuda.is_available()) en esta GPU no soportada oficialmente (gfx1031).
+    # El venv separado `env_rocm/` (creado a mano durante el setup original) tiene
+    # una versión de torch/ROCm que sí detecta la GPU sin crashear -- ese es el que
+    # hay que usar para levantar el server. Configurable por si en otra instalación
+    # el nombre/ubicación del venv que sí funciona es distinto.
+    comfyui_python_path: str = os.getenv(
+        "COMFYUI_PYTHON_PATH", r"E:\ComfyUI\ComfyUI_windows_portable\env_rocm\Scripts\python.exe"
+    )
+
+    # API nativa de Ollama (no la OpenAI-compatible de LMSTUDIO_BASE_URL) --
+    # generate_video/generate_image la usan para descargar/recargar el modelo de
+    # texto de la VRAM antes/después de generar, ya que compiten por la misma GPU.
+    ollama_native_base_url: str = os.getenv("OLLAMA_NATIVE_BASE_URL", "http://127.0.0.1:11434")
+
+    # generate_image (Flux.1 Schnell, un solo KSampler de 4 pasos) es más liviano que
+    # generate_video, pero se deja igual un margen generoso por la misma variabilidad
+    # de RAM/swapping observada en esta máquina.
+    comfyui_generation_timeout_image: float = float(os.getenv("COMFYUI_GENERATION_TIMEOUT_IMAGE", "600"))
+
+    # Cache en disco de índices de codebase (ver app/codebase/store.py) -- nunca
+    # escribe dentro del proyecto que se indexa, un JSON por proyecto acá.
+    codebase_index_dir: str = os.getenv(
+        "CODEBASE_INDEX_DIR", str(Path(__file__).resolve().parent.parent / "data" / "codebase_index")
+    )
+
+    # Vault de notas estilo Obsidian (ver app/obsidian/vault.py) -- reemplazo
+    # más rico de jarvis_reflect para notas con autor (jarvis/humano), tags y
+    # wikilinks. Son archivos .md reales con frontmatter YAML, abribles con
+    # Obsidian de verdad si el usuario quiere.
+    obsidian_vault_path: str = os.getenv(
+        "OBSIDIAN_VAULT_PATH", str(Path(__file__).resolve().parent.parent / "obsidian_vault")
+    )
+
 
 settings = Settings()
 
