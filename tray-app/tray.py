@@ -1,10 +1,30 @@
 """Tray app de Windows: arranca/para el backend y muestra su estado en la bandeja."""
 
+import ctypes
 import logging
 import os
+import sys
 import threading
 import time
 import webbrowser
+
+# QtWebEngine (usado por ui/graph_view.py para el grafo de Codebase/Obsidian,
+# importado transitivamente en cuanto se abre la ventana principal) crashea de
+# forma reproducible en esta GPU (AMD Radeon RX 6700 XT, driver 32.0.21037.1004)
+# al intentar crear el contexto GL compartido para su compositor -- confirmado
+# con dos crashes independientes en Qt6WebEngineCore.dll con el mismo offset
+# exacto (0x040ae451, excepción 0x80000003) horas antes de diagnosticar esto,
+# ver el Application Error de Windows del 2026-07-28. `--disable-gpu` a secas
+# evita el crash pero también apaga WebGL (rompe el grafo 3D de ui/graph_view.py,
+# que SÍ necesita GL para renderizar); `--disable-gpu-compositing` es más
+# quirúrgico -- apaga el compositor de Chromium (la parte que crasheaba) sin
+# tocar la creación de contextos WebGL, así que evita el crash Y deja el grafo
+# funcionando (validado: los 80 tests de la suite, incluidos los 7 de
+# test_graph_view.py que necesitan WebGL real, pasan con este flag). Tiene que
+# setearse ANTES de importar cualquier cosa que jale PySide6/QtWebEngine (la
+# import de `ui.main_window` más abajo), Chromium lo lee una sola vez al
+# inicializar.
+os.environ.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu-compositing")
 
 import pystray
 import requests
@@ -13,6 +33,34 @@ import config
 import process_manager
 from icon import build_image
 from ui.main_window import open_chat_window
+
+_ERROR_ALREADY_EXISTS = 183
+_MUTEX_NAME = "Local\\JarvisTrayAppSingleInstance"
+_instance_mutex_handle = None
+
+
+def _acquire_single_instance_lock() -> bool:
+    """True si esta es la única instancia; False si ya hay otra corriendo.
+
+    Un mutex con nombre (no un lockfile ni un puerto) porque Windows lo
+    libera solo cuando el proceso muere, incluso con un kill -9 -- un
+    lockfile puede quedar huérfano y bloquear arranques futuros hasta
+    borrarlo a mano. Bug real: doble click repetido en el acceso directo
+    apilaba una instancia de tray.py por click, cada una con su propio
+    ícono en la bandeja, sin que ninguna reemplace a la anterior.
+    """
+    global _instance_mutex_handle
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    if not handle:
+        return True  # No se pudo crear el mutex: no bloqueamos el arranque por esto.
+    if ctypes.windll.kernel32.GetLastError() == _ERROR_ALREADY_EXISTS:
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return False
+    # El handle tiene que sobrevivir mientras viva el proceso -- si se
+    # cerrara acá, Windows liberaría el mutex y una segunda instancia podría
+    # arrancar igual.
+    _instance_mutex_handle = handle
+    return True
 
 # Sin esto, todo lo que loguea voice_listener.py (logger "jarvis.voice") se pierde
 # en silencio: la tray corre con pythonw.exe (sin consola) y el logging de Python
@@ -132,4 +180,12 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if not _acquire_single_instance_lock():
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "Jarvis ya está corriendo -- mirá el ícono en la bandeja del sistema.",
+            "Jarvis",
+            0x40,  # MB_ICONINFORMATION
+        )
+        sys.exit(0)
     main()
