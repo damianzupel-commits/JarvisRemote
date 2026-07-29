@@ -262,20 +262,75 @@ pasan" con "se probó clickeando algo de verdad".
 
 **Por qué se desactivaron — evidencia dura, no una sospecha:**
 
-El 2026-07-27, la PC de Damian **se apagó por completo** (no un crash de
-proceso ni de ComfyUI — un apagado físico de hardware) al menos dos veces,
-ambas coincidiendo *al segundo* con el arranque de una de estas dos tools:
+**Corrección (2026-07-28):** la versión anterior de esta sección decía que
+hubo *dos* apagados físicos el 27/07, cada uno coincidiendo "al segundo" con
+el arranque de `generate_image` (16:23:06) y de `generate_video` (~16:57).
+Una revisión más profunda del Event Log de Windows (`Get-WinEvent`, log
+`System` completo, no solo los eventos 6008) muestra que eso es incorrecto:
+**fue un solo apagado de tarde**, no dos. El detalle:
 
-| Hora | Evidencia del backend | Evidencia del Event Log de Windows |
-|---|---|---|
-| 16:23:06 | `tool_call name=generate_image` a las 16:23:06,391 | Event 6008: "el cierre anterior del sistema a las 16:23:06 resultó inesperado" |
-| ~16:57 | Polling de `generate_video` (prompt del globo) corriendo normal hasta 16:56:58, silencio total después | `LastBootUpTime` = 16:57:26 (reinicio) |
+- El `Event 6008` que dice "el cierre anterior del sistema a las 16:23:06
+  resultó inesperado" usa un timestamp de *checkpoint* que Windows escribe
+  periódicamente (no un timestamp del instante exacto del corte). Los
+  eventos `Kernel-Power` ID 566 (cambio de estado de sesión) muestran que la
+  misma sesión (`BootId: 87`) siguió viva y logueando actividad normal a las
+  **16:32:27 y 16:32:57** — entre 9 y 26 minutos *después* del supuesto
+  apagado de las 16:23:06. Un PC apagada no puede loguear cambios de sesión,
+  así que el corte real fue después de las 16:32:57, no a las 16:23:06.
+- `backend/comfyui.log` se siguió escribiendo hasta las **16:57:01**, con el
+  último registro cortado a mitad de un paso de sampling de Wan 2.2
+  (`generate_video`, workflow WAN21: `50%|█████ | 1/2 [00:42<00:42,
+  42.98s/it]`, sin línea de cierre después). El reinicio completo de Windows
+  quedó registrado a las **16:57:26** — 25 segundos después del último byte
+  escrito en ese log.
 
-Sumado a un patrón previo de apagados similares (Event ID 41, "crítico", "se
-reinició el sistema sin apagarlo limpiamente") en los días 22 y 23 de julio,
-y un tercer apagado esa misma mañana del 27/07 (que en su momento se
-diagnosticó, erróneamente, como "se cayó el proceso del backend" — en
-realidad fue la PC entera).
+Conclusión revisada: **el arranque de `generate_image` a las 16:23:06 no
+causó un apagado inmediato** (el sistema demostrablemente siguió corriendo
+normal después). El apagado real de esa tarde ocurrió en algún punto entre
+las 16:32:57 y las 16:57:26, y todo indica que fue mientras `generate_video`
+estaba en pleno cómputo de GPU (Wan 2.2, mitad de un paso de sampling) — no
+al arrancar la tool, sino con la carga sostenida ya en curso.
+
+El apagado de esa misma mañana (checkpoint ~8:24:22, reinicio 9:02:51, en su
+momento diagnosticado erróneamente como "se cayó el proceso del backend")
+**no tiene relación con ComfyUI**: `comfyui.log` recién se creó a las
+09:00:16, es decir, después de ese apagado — ComfyUI ni había arrancado
+todavía.
+
+**Hallazgo nuevo, más importante que la coincidencia con `generate_video`:**
+esta PC tiene un historial de apagados del mismo tipo exacto —
+`Kernel-Power` Event ID 41, con `BugcheckCode: 0` (sin bugcheck de software,
+firma típica de corte de energía) — **casi a diario desde fines de junio
+hasta el 23 de julio** (20 eventos encontrados en ese rango), es decir,
+*semanas antes* de que `generate_video`/`generate_image` existieran en el
+código o se probaran por primera vez. Esto apunta a un problema de entrega
+de energía más amplio de esta máquina (fuente de poder al límite, o la
+instalación eléctrica de la casa) que ya existía de fondo — el pico de
+consumo sostenido de la GPU durante una generación de video probablemente
+lo hizo *más probable de disparar ese día en particular*, pero no parece ser
+la causa raíz en sí.
+
+Dato adicional que refuerza que no fue un crash de software: **ninguno de
+los dos apagados del 27/07 generó un Event ID 41** (a diferencia del patrón
+de fondo casi diario), no hay reporte WER de BSOD (Event 1001), no se
+generó ningún minidump en `C:\Windows\Minidump` ni `MEMORY.DMP` pese a que
+`CrashDumpEnabled=3` + `AutoReboot=1` están configurados, no hay ningún
+Event ID 4101 (timeout/recuperación de driver de GPU) en *todo* el
+historial del log de este equipo, y no hay eventos de `WHEA-Logger`
+(errores de hardware de CPU/memoria) alrededor de esas fechas. Los logs de
+System y Application quedan en silencio total en los minutos previos a cada
+corte — sin un "último aviso" — que es la firma típica de una pérdida
+abrupta de energía DC, no de un apagado iniciado por el sistema operativo.
+
+**Lo que esto NO permite determinar:** Windows no puede loguear la *causa*
+de un corte de energía real, porque el sistema operativo pierde la
+alimentación antes de poder escribir nada sobre qué lo disparó. Protección
+térmica, límite de la fuente de poder ante el pico de consumo de la GPU, o
+un problema de la instalación eléctrica de la casa siguen siendo hipótesis
+igual de compatibles con esta evidencia — **ninguna se puede confirmar ni
+descartar solo con Event Log**. AIDA64 estaba instalado pero nunca se había
+configurado para loguear temperaturas/voltajes, así que no había datos
+históricos para esa fecha (esto se corrigió el 2026-07-28, ver más abajo).
 
 **Diagnóstico anterior a este hallazgo (sigue siendo válido como parte del
 problema, pero no explica un apagado físico de PC):** ComfyUI puede
@@ -290,10 +345,12 @@ otra categoría que ningún fail-fast de software puede prevenir.
 
 **Hipótesis sin confirmar, a investigar antes de reactivar:** protección
 térmica de la GPU/CPU, la fuente de poder sin margen para el pico de consumo
-de la carga GPU, o un crash de driver lo bastante severo como para forzar un
-reset de hardware en vez de solo matar el proceso. Ninguna de las tres se
-investigó todavía — hace falta monitorear temperaturas/voltajes durante una
-generación controlada (con la PC vigilada, no desatendida) antes de siquiera
+de la carga GPU, o un problema de la instalación eléctrica de la casa.
+Ninguna de las tres se confirmó todavía. **Desde el 2026-07-28, AIDA64 está
+configurado para loguear temperaturas/voltajes a CSV** (`backend/hw_monitor_logs/`,
+intervalo de 5s) para que la próxima vez que la PC esté bajo carga de GPU
+quede un registro real — hace falta una generación controlada (con la PC
+vigilada, no desatendida) revisando ese log después antes de siquiera
 considerar reactivar estas dos tools.
 
 **Cómo quedaron desactivadas:** no se borró código. `backend/app/tools/__init__.py`

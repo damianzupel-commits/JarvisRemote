@@ -24,6 +24,11 @@ tray-app/voice_debug/
 # se regenera solo (ver _comfyui_shared.py).
 backend/comfyui.log
 
+# Logs de AIDA64 (temperaturas/voltajes) -- telemetría local de esta máquina
+# para diagnosticar apagados físicos durante cargas de GPU, ver INFORME_COMPLETO.md
+# sección 4.5. No son datos del proyecto, no se publican.
+backend/hw_monitor_logs/
+
 # Notas internas del agente (backend/app/tools/reflect.py) -- pueden contener
 # preferencias y detalles personales del usuario, no son para publicar.
 backend/reflections.jsonl

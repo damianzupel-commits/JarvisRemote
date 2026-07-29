@@ -168,6 +168,33 @@ pytest
   del usuario) con búsqueda simple por superposición de palabras. Para que el
   modelo recuerde decisiones no triviales entre conversaciones que no
   comparten historial.
+- `app/security/` — Fase 1 del roadmap de "profesiones" de Jarvis: centinela de
+  seguridad de código. `scanners.py` (wrappers de subprocess sobre Semgrep,
+  Bandit, cppcheck, clang-tidy y Trivy reales -- no reimplementa ningún
+  analizador, el LLM no debe "adivinar" vulnerabilidades por su cuenta),
+  `runner.py` (decide qué escáner correr según los lenguajes que ya detectó
+  `app/codebase/`: Semgrep siempre, Bandit solo si hay Python, cppcheck solo
+  si hay C/C++ (Semgrep `--config auto` casi no tiene reglas efectivas para
+  ese stack, confirmado real auditando Luanti el 2026-07-29: 0 hallazgos por
+  falta de herramienta, no de bugs), clang-tidy además si hay C/C++ Y el
+  proyecto trae un `compile_commands.json` real (dataflow interprocedural
+  real vía `clang-analyzer-*`, más profundo que cppcheck -- pero a propósito
+  NUNCA corre sin compilation database: sin las flags de include/macros
+  reales, clang-tidy no puede parsear ni un solo `#include` de la librería
+  estándar, confirmado real el 2026-07-30 -- ver el docstring de
+  `run_clang_tidy`), Trivy si el binario está instalado -- no viene por pip,
+  instalación aparte), `store.py` (cachea el último escaneo por
+  proyecto en `settings.security_scan_dir`, gitignored, para que
+  `security_apply_fix` pueda resolver un `finding_id` sin re-escanear),
+  `fixer.py` (aplica un fix puntual: dry-run con diff por default, y si se
+  confirma, escribe + commitea SOLO ese archivo en un commit propio y
+  reversible con `git revert`, sin tocar nada más que esté en stage).
+- `app/tools/security_scan.py` — `security_scan_project`, `security_get_finding`,
+  `security_apply_fix`. El flujo esperado: escanear (herramienta real) →
+  interpretar cada hallazgo consultando `obsidian_search_notes` (la base de
+  conocimiento de ciberseguridad ya tiene notas por vulnerabilidad/OWASP/cómo
+  leer falsos positivos de cada escáner) → si hay fix seguro, aplicarlo con
+  `confirm=true` recién en una segunda llamada explícita, nunca de una.
 - `app/main.py` — endpoints `GET /api/health` y `POST /api/chat`.
 
 ## Agregar una tool nueva
