@@ -92,6 +92,10 @@ def _extract_symbols_treesitter(grammar: str, source: bytes) -> list[Symbol] | N
     symbols: list[Symbol] = []
     seen: set[tuple[str, str, int]] = set()
     for kind, nodes in captures.items():
+        if kind.startswith("_"):
+            # Captura auxiliar solo para un predicado `#eq?`/`#match?` de la
+            # query (ver symbol_queries.py) -- no es un símbolo real.
+            continue
         for node in nodes:
             line = node.start_point[0] + 1
             if kind == "import":

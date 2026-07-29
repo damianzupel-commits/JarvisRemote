@@ -9,6 +9,11 @@ Se probaron a mano contra snippets reales de cada lenguaje (ver
 tests/test_codebase_indexer.py) -- si una gramática nueva se agrega a
 `languages.LANGUAGE_TO_GRAMMAR`, hace falta agregarle su entrada acá o cae al
 extractor regex genérico.
+
+Capturas que empiezan con "_" (ej. `@_require_fn`) son auxiliares -- existen
+solo para que un predicado tipo `#eq?` pueda filtrar el patrón (acá, "solo
+llamadas a la función `require`, no cualquier call_expression"), no
+representan un símbolo real. `indexer.py` las descarta explícitamente.
 """
 
 from __future__ import annotations
@@ -27,6 +32,10 @@ SYMBOL_QUERIES: dict[str, str] = {
         (variable_declarator name: (identifier) @function value: (arrow_function))
         (variable_declarator name: (identifier) @function value: (function_expression))
         (import_statement) @import
+        (call_expression
+            function: (identifier) @_require_fn
+            arguments: (arguments (string) @_require_arg)
+            (#eq? @_require_fn "require")) @import
     """,
     "typescript": """
         (function_declaration name: (identifier) @function)
@@ -36,6 +45,10 @@ SYMBOL_QUERIES: dict[str, str] = {
         (variable_declarator name: (identifier) @function value: (arrow_function))
         (variable_declarator name: (identifier) @function value: (function_expression))
         (import_statement) @import
+        (call_expression
+            function: (identifier) @_require_fn
+            arguments: (arguments (string) @_require_arg)
+            (#eq? @_require_fn "require")) @import
     """,
     "tsx": """
         (function_declaration name: (identifier) @function)
@@ -45,6 +58,10 @@ SYMBOL_QUERIES: dict[str, str] = {
         (variable_declarator name: (identifier) @function value: (arrow_function))
         (variable_declarator name: (identifier) @function value: (function_expression))
         (import_statement) @import
+        (call_expression
+            function: (identifier) @_require_fn
+            arguments: (arguments (string) @_require_arg)
+            (#eq? @_require_fn "require")) @import
     """,
     "java": """
         (method_declaration name: (identifier) @function)

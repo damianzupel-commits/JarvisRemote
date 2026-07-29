@@ -1,5 +1,11 @@
+from pathlib import Path
+
+import pytest
+
 from app.codebase.graph import build_edges
 from app.codebase.indexer import build_index
+
+_NODEGOAT_ROOT = Path(r"C:\Users\dam\Documents\test-scans\NodeGoat")
 
 
 def _write(path, content):
@@ -31,6 +37,15 @@ def _make_project(tmp_path):
         root / "frontend" / "src" / "index.js",
         "import Foo from './foo';\n"
         "import react from 'react';\n",
+    )
+
+    _write(root / "server" / "bar.js", "module.exports = function Bar() {};\n")
+    _write(root / "server" / "baz.js", "module.exports = function Baz() {};\n")
+    _write(
+        root / "server" / "app.js",
+        "const Bar = require('./bar');\n"
+        "const { Baz } = require('./baz');\n"
+        "const express = require('express');\n",
     )
 
     return root
@@ -92,6 +107,25 @@ def test_js_bare_package_import_produces_no_edge(tmp_path):
     assert all(e["source"] != "frontend/src/index.js" or "react" not in e["target"] for e in edges)
 
 
+def test_js_commonjs_require_resolves(tmp_path):
+    root = _make_project(tmp_path)
+    index = build_index(root)
+    edges = _edge_set(build_edges(index))
+
+    assert ("server/app.js", "server/bar.js") in edges
+    # Destructurado (`const { Baz } = require(...)`) resuelve igual que la
+    # forma directa (`const Bar = require(...)`).
+    assert ("server/app.js", "server/baz.js") in edges
+
+
+def test_js_require_bare_package_produces_no_edge(tmp_path):
+    root = _make_project(tmp_path)
+    index = build_index(root)
+    edges = build_edges(index)
+
+    assert all(e["source"] != "server/app.js" or "express" not in e["target"] for e in edges)
+
+
 def test_no_self_edges(tmp_path):
     root = _make_project(tmp_path)
     index = build_index(root)
@@ -105,3 +139,17 @@ def test_unresolvable_language_produces_no_edges(tmp_path):
     index = build_index(tmp_path)
 
     assert build_edges(index) == []
+
+
+@pytest.mark.skipif(not _NODEGOAT_ROOT.is_dir(), reason="NodeGoat no está clonado en esta máquina")
+def test_nodegoat_commonjs_project_now_produces_edges():
+    # Caso real que motivó el soporte de `require()`: NodeGoat es Express/
+    # CommonJS puro (sin `import ... from`), así que antes de soportar
+    # `require()` el grafo de este proyecto daba 0 edges -- indistinguible en
+    # la UI de un bug real. Ver conversación del 2026-07-29.
+    index = build_index(_NODEGOAT_ROOT)
+    edges = build_edges(index)
+
+    assert len(edges) > 0
+    node_ids = {f.path for f in index.files}
+    assert all(e["source"] in node_ids and e["target"] in node_ids for e in edges)

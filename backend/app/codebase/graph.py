@@ -5,10 +5,11 @@ pestaña Codebase, ver `ui/graph_view.py`).
 Deliberadamente conservador: solo resolvemos imports para los lenguajes donde
 se puede hacer con confianza razonable a partir de texto (Python completo --
 absolutos, relativos con puntos, y `from paquete import submódulo`-- y JS/TS/TSX
-solo imports relativos, que son inequívocos). El resto de los lenguajes
-indexados quedan sin edges en vez de inventar relaciones que no podemos
-verificar -- un grafo incompleto pero honesto es mejor que uno que parece
-completo y está mal.
+solo imports relativos, que son inequívocos, tanto ES modules (`import ... from
+'./x'`) como CommonJS (`require('./x')`, ver symbol_queries.py para cómo se
+extrae ese símbolo)). El resto de los lenguajes indexados quedan sin edges en
+vez de inventar relaciones que no podemos verificar -- un grafo incompleto
+pero honesto es mejor que uno que parece completo y está mal.
 
 `_SuffixIndex` existe porque un repo indexado puede contener más de una raíz
 de paquete Python real (ej. este mismo repo: backend/ y tray-app/ son cada
@@ -27,6 +28,7 @@ from .models import CodebaseIndex
 _PY_FROM_RE = re.compile(r"^from\s+([.\w]*)\s+import\s+(.+)$")
 _PY_IMPORT_RE = re.compile(r"^import\s+(.+)$")
 _JS_RELATIVE_RE = re.compile(r"""from\s+['"](\.[^'"]+)['"]""")
+_JS_REQUIRE_RE = re.compile(r"""require\(\s*['"](\.[^'"]+)['"]\s*\)""")
 
 _JS_SUFFIXES = ["", ".js", ".jsx", ".ts", ".tsx", "/index.js", "/index.jsx", "/index.ts", "/index.tsx"]
 
@@ -108,7 +110,7 @@ def _python_edges(file_path: str, import_text: str, index: _SuffixIndex) -> list
 
 
 def _js_edges(file_path: str, import_text: str, index: _SuffixIndex) -> list[str]:
-    m = _JS_RELATIVE_RE.search(import_text)
+    m = _JS_RELATIVE_RE.search(import_text) or _JS_REQUIRE_RE.search(import_text)
     if not m:
         return []
     parts = file_path.split("/")[:-1]

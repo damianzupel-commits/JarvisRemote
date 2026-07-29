@@ -90,6 +90,29 @@ def test_javascript_file_symbols_extracted_via_treesitter(tmp_path):
     assert ("class", "Widget") in kinds_names
 
 
+def test_javascript_commonjs_require_extracted_as_import_symbol(tmp_path):
+    (tmp_path / "a.js").write_text(
+        'const x = require("./util");\n'
+        'const { y } = require("./other");\n'
+        'require("./sidefx");\n'
+        'const notRequire = foo("./bar");\n',
+        encoding="utf-8",
+    )
+    index = build_index(tmp_path)
+
+    a_js = next(f for f in index.files if f.path == "a.js")
+    assert a_js.parsed is True
+    import_names = {s.name for s in a_js.symbols if s.kind == "import"}
+    assert 'require("./util")' in import_names
+    assert 'require("./other")' in import_names
+    assert 'require("./sidefx")' in import_names
+    # Una llamada a una función que no es `require` no debe verse como import.
+    assert not any("bar" in name for name in import_names)
+    # Las capturas auxiliares del predicado `#eq?` (ver symbol_queries.py) no
+    # deben filtrarse como símbolos de ningún otro kind.
+    assert all(s.kind in {"function", "class", "import"} for s in a_js.symbols)
+
+
 def test_unsupported_language_falls_back_to_regex(tmp_path):
     (tmp_path / "app.dart").write_text("class Foo {\n  void bar() {}\n}\n", encoding="utf-8")
     index = build_index(tmp_path)
