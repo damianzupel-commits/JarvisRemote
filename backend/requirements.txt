@@ -15,3 +15,31 @@ tree-sitter>=0.24
 tree-sitter-language-pack>=0.11
 python-frontmatter>=1.1
 pathspec>=0.12
+# Escáneres SAST reales para el centinela de seguridad de código (ver
+# app/security/) -- Trivy (SCA) no viene por pip, se instala aparte.
+semgrep>=1.171
+bandit>=1.9
+# cppcheck real para C/C++ (Semgrep --config auto casi no tiene reglas
+# efectivas para ese stack, confirmado real auditando Luanti el 2026-07-29:
+# 0 hallazgos, no por ausencia de bugs sino por ausencia de herramienta).
+# Este wheel (mantenido por terceros, ver github.com/msclock/cppcheck-wheel)
+# empaqueta el binario real de cppcheck -- a diferencia del cppcheck oficial
+# (que en Windows solo distribuye un instalador .msi, sin build portable),
+# esto no requiere admin/UAC ni instalación aparte.
+cppcheck>=2.17
+# clang-tidy real (analizador semántico de Clang -- dataflow interprocedural
+# real vía clang-analyzer-*, más profundo que cppcheck) para C/C++. Este wheel
+# empaqueta el binario real de LLVM, no un toolchain de compilación completo:
+# SOLO produce hallazgos reales si el proyecto trae un compile_commands.json
+# real (ver app/security/scanners.py::run_clang_tidy y
+# find_compile_commands_dir) -- sin eso, clang-tidy (a diferencia de cppcheck,
+# que trae headers sintéticos propios) ni siquiera puede parsear un #include
+# de la librería estándar, confirmado real el 2026-07-30 en una máquina sin
+# ningún compilador C/C++ instalado. `security_scan_project` lo salta con
+# gracia (reportando el motivo) cuando no hay compilation database.
+clang-tidy>=20
+# Analizadores de calidad/bugs generales para Python (ver app/quality/) --
+# ESLint/tsc (JS/TS) y detekt (Kotlin) no vienen por pip, se instalan aparte
+# (requieren Node.js / JVM respectivamente).
+ruff>=0.6
+mypy>=1.11
