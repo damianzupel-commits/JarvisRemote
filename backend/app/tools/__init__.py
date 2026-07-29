@@ -103,20 +103,31 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 from . import filesystem  # noqa: E402,F401
 from . import browser  # noqa: E402,F401
 from . import desktop  # noqa: E402,F401
+from . import pc_command  # noqa: E402,F401
 from . import phone  # noqa: E402,F401
 from . import reflect  # noqa: E402,F401
 from . import codebase  # noqa: E402,F401
 from . import obsidian  # noqa: E402,F401
+from . import security_scan  # noqa: E402,F401
+from . import quality_scan  # noqa: E402,F401
+from . import code_edit  # noqa: E402,F401
+from . import audit_report  # noqa: E402,F401
 
 # generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
 # propósito, no importadas -- no es un problema de estilo, es una precaución
 # de hardware real: el 2026-07-27 la PC se apagó por completo (no un crash de
-# proceso, un apagado físico) al menos dos veces, ambas coincidiendo al
-# segundo con el arranque de una de estas dos tools (confirmado cruzando
-# backend.log contra el Event Log de Windows, Event ID 41/6008 -- "se reinició
-# el sistema sin apagarlo limpiamente"), más un patrón de apagados similares
-# en días previos. No hay sandboxing de software posible contra esto -- si es
-# térmico o de fuente de poder, hace falta resolverlo a nivel de hardware
-# antes de volver a exponer estas tools al agente. Ver INFORME_COMPLETO.md.
+# proceso, un apagado físico) mientras generate_video estaba en pleno cómputo
+# de GPU (confirmado cruzando comfyui.log -- última escritura 16:57:01, a
+# mitad de un paso de sampling -- contra el Event Log de Windows, reinicio a
+# las 16:57:26). Además, esta PC ya tenía un patrón de apagados del mismo
+# tipo (Kernel-Power ID 41, BugcheckCode 0 -- sin BSOD/crash de software) casi
+# a diario desde fines de junio hasta el 23/07, semanas antes de que estas
+# tools existieran -- probablemente un problema de entrega de energía más
+# amplio (fuente al límite o instalación eléctrica), no algo causado
+# específicamente por esta tool, aunque el pico de consumo de la GPU lo hizo
+# más probable ese día. No hay sandboxing de software posible contra esto --
+# si es térmico o de fuente de poder, hace falta resolverlo a nivel de
+# hardware antes de volver a exponer estas tools al agente. AIDA64 quedó
+# configurado con logging a CSV para la próxima prueba. Ver INFORME_COMPLETO.md.
 # from . import video_gen  # noqa: E402,F401
 # from . import image_gen  # noqa: E402,F401

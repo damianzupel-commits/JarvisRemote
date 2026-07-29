@@ -34,6 +34,14 @@ class Settings:
     # versión sin fricción, pero queda como flag real para poder apagarlo.
     desktop_control_enabled: bool = _bool(os.getenv("DESKTOP_CONTROL_ENABLED"), True)
 
+    # Ejecución de comandos de shell reales en la PC (ver app/tools/pc_command.py::
+    # pc_run_command) -- análogo directo de PHONE_SHELL_ENABLED pero del lado de la
+    # PC: código/comandos arbitrarios (pip install, pytest, npm, git, etc.), no solo
+    # tools puntuales. Mismo criterio que DESKTOP_CONTROL_ENABLED/PHONE_SHELL_ENABLED
+    # (usuario ya pidió explícitamente la versión sin fricción, prendido por default),
+    # pero queda como flag real para poder apagarlo sin tocar código.
+    pc_shell_enabled: bool = _bool(os.getenv("PC_SHELL_ENABLED"), True)
+
     max_agent_iterations: int = int(os.getenv("MAX_AGENT_ITERATIONS", "10"))
 
     # Tope de mensajes que se guardan por conversación en memoria (ver
@@ -127,6 +135,21 @@ class Settings:
     # Obsidian de verdad si el usuario quiere.
     obsidian_vault_path: str = os.getenv(
         "OBSIDIAN_VAULT_PATH", str(Path(__file__).resolve().parent.parent / "obsidian_vault")
+    )
+
+    # Cache en disco del último escaneo de seguridad por proyecto (ver
+    # app/security/store.py) -- mismo criterio que CODEBASE_INDEX_DIR, nunca
+    # escribe dentro del proyecto escaneado.
+    security_scan_dir: str = os.getenv(
+        "SECURITY_SCAN_DIR", str(Path(__file__).resolve().parent.parent / "data" / "security_scans")
+    )
+
+    # Cache en disco del último escaneo de CALIDAD (bugs generales, no
+    # seguridad) por proyecto (ver app/quality/store.py) -- mismo criterio que
+    # SECURITY_SCAN_DIR, carpeta separada para no mezclar los dos tipos de
+    # hallazgo en el mismo cache.
+    quality_scan_dir: str = os.getenv(
+        "QUALITY_SCAN_DIR", str(Path(__file__).resolve().parent.parent / "data" / "quality_scans")
     )
 
 
