@@ -7,6 +7,9 @@ Borrar está deshabilitado salvo que `FS_ALLOW_DELETE=true` en el .env.
 
 from pathlib import Path
 
+from .. import audit_log
+from ..codebase import store as codebase_store
+from ..codeedit import fixer
 from ..config import settings
 from . import register_tool
 
@@ -18,6 +21,24 @@ def _resolve(path: str) -> Path:
     if target != root and root not in target.parents:
         raise PermissionError(f"Path '{path}' está fuera de la carpeta permitida ({root})")
     return target
+
+
+def _find_indexed_git_project(target: Path) -> Path | None:
+    """Si `target` cae dentro de un repo git que ya fue indexado con
+    codebase_index_project, devuelve la raíz de ese repo -- usado por
+    fs_write_file para decidir si la escritura tiene que pasar por el circuito
+    auditado/reversible de app/codeedit (ver la nota de Obsidian de auditoría),
+    en vez de ser una escritura silenciosa como cualquier otro archivo bajo
+    FS_ALLOWED_ROOT.
+
+    Se detiene en el primer '.git' que encuentra subiendo desde el archivo --
+    ese es el repo real de ese archivo. Si ese repo puntual no está indexado,
+    no sigue subiendo a buscar un ancestro más arriba que sí lo esté: un
+    ancestro indexado no sería "el proyecto" al que pertenece este archivo."""
+    for ancestor in target.parents:
+        if (ancestor / ".git").exists():
+            return ancestor if codebase_store.load_cached(ancestor) is not None else None
+    return None
 
 
 @register_tool(
@@ -84,7 +105,9 @@ def fs_read_file(path: str, max_chars: int = 20000) -> dict:
     name="fs_write_file",
     description=(
         "Crea o sobreescribe un archivo en la PC del usuario con el contenido dado "
-        "(crea carpetas intermedias si hace falta)."
+        "(crea carpetas intermedias si hace falta). Si el archivo cae dentro de un proyecto ya indexado con "
+        "codebase_index_project y que además es un repo git, la escritura queda commiteada aparte de forma "
+        "reversible (git revert) -- ver el campo 'commit' del resultado."
     ),
     parameters={
         "type": "object",
@@ -105,7 +128,27 @@ def fs_write_file(path: str, content: str, append: bool = False) -> dict:
     mode = "a" if append else "w"
     with target.open(mode, encoding="utf-8") as f:
         f.write(content)
-    return {"path": str(target), "bytes_written": len(content.encode("utf-8")), "append": append}
+    result = {"path": str(target), "bytes_written": len(content.encode("utf-8")), "append": append}
+
+    project_root = _find_indexed_git_project(target)
+    if project_root is None:
+        result["audited"] = False
+        return result
+
+    file_rel = target.relative_to(project_root).as_posix()
+    action = "agrega contenido a" if append else "escribe"
+    commit_message = f"chore: Jarvis {action} '{file_rel}' via fs_write_file"
+    commit_info = fixer.commit_if_eligible(project_root, file_rel, commit_message)
+
+    result["audited"] = True
+    result["commit"] = commit_info
+    audit_log.log_tool_call(
+        target="fs",
+        tool="fs_write_file",
+        arguments={"path": str(project_root), "file": file_rel, "append": append},
+        result=commit_info,
+    )
+    return result
 
 
 @register_tool(

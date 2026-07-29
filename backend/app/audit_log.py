@@ -70,3 +70,28 @@ def log_tool_call(
         logging.getLogger("jarvis.audit_log_internal").warning(
             "No se pudo escribir la línea de auditoría para tool=%s", tool, exc_info=True
         )
+
+
+def read_entries(target: str | None = None, tool: str | None = None) -> list[dict]:
+    """Lee de vuelta las entradas ya loggeadas (solo el archivo actual, no los
+    rotados `.1`/`.2`/...), opcionalmente filtradas por target/tool -- usado
+    por `audit_report.generate_report` para saber qué fixes/ediciones ya se
+    aplicaron de verdad a un proyecto. Tolera líneas corruptas (las salta): un
+    log parcialmente dañado no debe romper a quien lo esté leyendo."""
+    if not _AUDIT_LOG_PATH.is_file():
+        return []
+    entries = []
+    for line in _AUDIT_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if target is not None and entry.get("target") != target:
+            continue
+        if tool is not None and entry.get("tool") != tool:
+            continue
+        entries.append(entry)
+    return entries
