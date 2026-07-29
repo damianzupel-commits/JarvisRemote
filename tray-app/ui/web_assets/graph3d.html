@@ -21,11 +21,15 @@
   });
 
   const elem = document.getElementById('graph');
+
+  const NODE_RADIUS = 4.5; // debe matchear nodeRelSize (val=1 por default)
+  const HALO_RADIUS = NODE_RADIUS * 1.7;
+
   const Graph = ForceGraph3D()(elem)
     .backgroundColor('#15151a')
     .nodeLabel(n => n.label)
     .nodeColor(n => n.color)
-    .nodeRelSize(4.5)
+    .nodeRelSize(NODE_RADIUS)
     .linkColor(() => 'rgba(190,190,200,0.35)')
     .linkOpacity(0.6)
     .linkWidth(0.6)
@@ -53,10 +57,141 @@
     Graph.width(elem.clientWidth).height(elem.clientHeight);
   });
 
-  // Punto de entrada que llama Python (graph_view.py) cada vez que hay datos
-  // nuevos o cambia el filtro -- reemplaza el grafo completo.
+  // Halo de severidad: un aro de riesgo (rojo/naranja/amarillo, ver
+  // colors.py::color_for_severity) alrededor de la esfera del nodo, que
+  // sigue coloreada por lenguaje -- capa aparte que se AGREGA, no reemplaza
+  // el relleno. Implementado como una esfera translúcida más grande (no un
+  // anillo/torus plano: en un grafo 3D con cámara orbitable un anillo se ve
+  // como una línea al mirarlo de canto, la esfera se lee como halo desde
+  // cualquier ángulo).
+  //
+  // OJO -- esto NO usa `nodeThreeObject`/`nodeThreeObjectExtend` a propósito.
+  // Probado en vivo: 3d-force-graph.min.js trae three.js empaquetado adentro
+  // pero no lo expone como `window.THREE` acá, y vendorizar una copia propia
+  // de three.js aparte para construir la geometría rompe todo -- la librería
+  // SÍ detecta un `window.THREE` preexistente y lo prefiere sobre su propia
+  // copia empaquetada ("Multiple instances of Three.js being imported"), y
+  // como la versión vendorizada no coincide con la que trae adentro
+  // (le faltaba `THREE.Timer`), ForceGraph3D ni siquiera llegaba a
+  // inicializar. La solución robusta es no instanciar clases de THREE
+  // nunca por cuenta propia: se "toman prestadas" las clases (Mesh,
+  // SphereGeometry, MeshBasicMaterial) de un objeto que 3d-force-graph ya
+  // creó él mismo (`node.__threeObj`, el binding interno que usa para la
+  // esfera default de cada nodo) -- así siempre queda garantizado que son
+  // exactamente las mismas clases que ya usa el renderer, sin problema de
+  // versiones ni de "múltiples instancias". Se agrega el halo como hijo
+  // directo de esa esfera ya existente en vez de pasar por
+  // nodeThreeObject, para no tocar en absoluto el pipeline de creación de
+  // nodos default (comprobado frágil: un solo halo roto ahí frenaba la
+  // creación de TODOS los nodos del grafo, no solo el que fallaba).
+  // Radio/opacidad por severidad -- NO alcanza con solo cambiar el color:
+  // confirmado real capturando la app en vivo (sveltekit-fastapi-starter,
+  // 2026-07-29) que un halo rojo (crítico) y uno amarillo (medio) a la MISMA
+  // opacidad (0.28 fijo, como estaba antes) se perciben con intensidad muy
+  // distinta -- el ojo humano es mucho más sensible al amarillo que al rojo a
+  // baja saturación sobre fondo oscuro, así que el halo "medio" terminaba
+  // viéndose más alarmante que el "crítico", exactamente al revés de lo que
+  // tiene que pasar. La severidad ahora se codifica también en tamaño y
+  // opacidad (crítico > alto > medio en las dos), no solo en color -- así la
+  // jerarquía visual es correcta incluso para alguien que no distingue bien
+  // los tonos (daltonismo rojo-verde incluido).
+  const SEVERITY_HALO_STYLE = {
+    '#ef4444': { radiusScale: 1.45, opacity: 0.60 }, // crítico
+    '#f97316': { radiusScale: 1.20, opacity: 0.44 }, // alto
+    '#eab308': { radiusScale: 1.00, opacity: 0.30 }, // medio
+  };
+  const DEFAULT_HALO_STYLE = { radiusScale: 1.00, opacity: 0.30 };
+
+  function findGeometryDonor() {
+    const nodes = Graph.graphData().nodes;
+    return nodes.map(n => n.__threeObj).find(o => o && o.geometry && o.geometry.type === 'SphereGeometry') || null;
+  }
+
+  function addSeverityHalo(node, color) {
+    const mesh = node.__threeObj;
+    if (!mesh) return;
+    const donor = findGeometryDonor();
+    if (!donor) return; // todavía no se creó ninguna esfera real -- se reintenta en el próximo pase
+    try {
+      const style = SEVERITY_HALO_STYLE[color] || DEFAULT_HALO_STYLE;
+      const geometry = new donor.geometry.constructor(HALO_RADIUS * style.radiusScale, 16, 16);
+      const material = new donor.material.constructor({
+        color,
+        transparent: true,
+        opacity: style.opacity,
+        depthWrite: false,
+      });
+      const halo = new donor.constructor(geometry, material);
+      halo.userData.__isSeverityHalo = true;
+      mesh.add(halo);
+      mesh.userData.__hasSeverityHalo = true;
+    } catch (err) {
+      // Un halo roto en un nodo puntual no debería tumbar el resto --
+      // ese nodo se queda con su color de relleno nomás, sin halo.
+      console.error('addSeverityHalo failed for', node.id, err);
+    }
+  }
+
+  function removeSeverityHalo(node) {
+    const mesh = node.__threeObj;
+    if (!mesh || !mesh.userData.__hasSeverityHalo) return;
+    mesh.children
+      .filter(c => c.userData && c.userData.__isSeverityHalo)
+      .forEach(c => {
+        mesh.remove(c);
+        if (c.geometry) c.geometry.dispose();
+        if (c.material) c.material.dispose();
+      });
+    mesh.userData.__hasSeverityHalo = false;
+  }
+
+  function applySeverityHalos() {
+    const nodes = Graph.graphData().nodes;
+    if (!findGeometryDonor()) return false;
+    nodes.forEach(n => {
+      if (n.severityColor && n.__threeObj && !n.__threeObj.userData.__hasSeverityHalo) {
+        addSeverityHalo(n, n.severityColor);
+      }
+    });
+    return true;
+  }
+
+  // Punto de entrada que llama Python (graph_view.py) cuando cambia el
+  // proyecto/filtro -- reemplaza el grafo completo, dispara el layout de
+  // fuerzas de cero. Para actualizaciones de severidad sobre un grafo YA
+  // cargado usar `updateNodeSeverity` (más abajo), NUNCA esto -- ver esa nota.
   window.setGraphData = function (data) {
     Graph.graphData(data);
+    // Los nodos (y su esfera default `__threeObj`) recién existen unos
+    // frames después de `graphData()` -- dos rAF encadenados alcanzan en el
+    // caso normal; el setTimeout de más abajo es la red de seguridad para
+    // grafos grandes/máquinas lentas donde ese primer intento todavía
+    // encuentra el grafo sin ninguna esfera creada.
+    requestAnimationFrame(() => requestAnimationFrame(applySeverityHalos));
+    setTimeout(applySeverityHalos, 800);
+  };
+
+  // Punto de entrada para el polling periódico (ver
+  // CodebaseView._on_poll_tick) -- actualiza el halo de severidad de nodos
+  // YA existentes SIN pasar por `Graph.graphData()`. Esto es crítico: llamar
+  // a `graphData()` de nuevo, aunque sea con el mismo array de nodos/links,
+  // reinicia el alpha/calor de la simulación de fuerzas de d3 -- confirmado
+  // en vivo (bug real reportado: el grafo entero "explotaba" reacomodándose
+  // cada 4s durante el polling). Acá se muta el `severityColor` de los nodos
+  // que ya están en `Graph.graphData().nodes` (mismas referencias de objeto,
+  // mismas x/y/z) y se agrega/saca el mesh del halo puntualmente -- el layout
+  // ni se entera, las posiciones no se tocan.
+  window.updateNodeSeverity = function (severityById) {
+    const byId = new Map(Graph.graphData().nodes.map(n => [n.id, n]));
+    Object.keys(severityById).forEach(id => {
+      const node = byId.get(id);
+      if (!node) return;
+      const newColor = severityById[id] || null;
+      if ((node.severityColor || null) === newColor) return; // sin cambios, no tocar nada
+      node.severityColor = newColor || undefined;
+      removeSeverityHalo(node);
+      if (newColor) addSeverityHalo(node, newColor);
+    });
   };
 </script>
 </body>

@@ -49,8 +49,17 @@ class _GraphSpy:
     def __init__(self):
         self.calls: list[dict] = []
 
-    def __call__(self, nodes, edges, id_key, color_fn, label_fn):
-        self.calls.append({"nodes": nodes, "edges": edges, "id_key": id_key, "color_fn": color_fn, "label_fn": label_fn})
+    def __call__(self, nodes, edges, id_key, color_fn, label_fn, severity_color_fn=None):
+        self.calls.append(
+            {
+                "nodes": nodes,
+                "edges": edges,
+                "id_key": id_key,
+                "color_fn": color_fn,
+                "label_fn": label_fn,
+                "severity_color_fn": severity_color_fn,
+            }
+        )
 
     @property
     def last(self) -> dict:
@@ -61,6 +70,51 @@ def _spy_on_graph(view: CodebaseView) -> _GraphSpy:
     spy = _GraphSpy()
     view.graph_view.set_graph = spy
     return spy
+
+
+class _UpdateSeveritySpy:
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def __call__(self, severity_by_id):
+        self.calls.append(severity_by_id)
+
+    @property
+    def last(self) -> dict:
+        return self.calls[-1]
+
+
+def _spy_on_update_severity(view: CodebaseView) -> _UpdateSeveritySpy:
+    spy = _UpdateSeveritySpy()
+    view.graph_view.update_severity = spy
+    return spy
+
+
+class _NoOpThread:
+    """Reemplazo de los QThread reales (`GraphFetchThread`/
+    `FileContentFetchThread`) para tests que disparan varios ciclos de
+    índice/click y simulan la respuesta llamando a los handlers directo --
+    sin esto, cada ciclo deja un QThread real corriendo de fondo (con
+    `requests.get` mockeado igual, pero real en tanto QThread), y con más de
+    uno vivo a la vez la señal que entrega al terminar puede llegarle a la
+    vista ya en medio del teardown del test, colgando la suite (bug real
+    reproducido armando estos mismos tests)."""
+
+    def __init__(self, *a, **k):
+        pass
+
+    def start(self):
+        pass
+
+    def isRunning(self):
+        return False
+
+
+def _disable_real_threads(monkeypatch) -> None:
+    import ui.codebase_view as codebase_view_module
+
+    monkeypatch.setattr(codebase_view_module, "GraphFetchThread", _NoOpThread)
+    monkeypatch.setattr(codebase_view_module, "FileContentFetchThread", _NoOpThread)
 
 
 SAMPLE_INDEX = {
@@ -166,6 +220,139 @@ def test_graph_label_fn_uses_just_the_filename(qtbot, monkeypatch):
 
     py_file = next(f for f in spy.last["nodes"] if f["path"] == "src/main.py")
     assert spy.last["label_fn"](py_file) == "main.py"
+
+
+def test_graph_severity_color_fn_looks_up_severity_by_path(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    spy = _spy_on_graph(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    graph = {
+        "edges": SAMPLE_EDGES,
+        "nodes": [
+            {"path": "src/main.py", "language": "Python", "severity": "critical", "finding_count": 1},
+            {"path": "src/util.js", "language": "JavaScript", "severity": None, "finding_count": 0},
+        ],
+        "security_scanned": True,
+        "security_scanned_at": "2026-07-29T00:00:00+00:00",
+        "quality_scanned": False,
+        "quality_scanned_at": None,
+    }
+    view._on_graph_ready(graph)
+
+    py_file = next(f for f in spy.last["nodes"] if f["path"] == "src/main.py")
+    js_file = next(f for f in spy.last["nodes"] if f["path"] == "src/util.js")
+    assert spy.last["severity_color_fn"](py_file) == "#ef4444"
+    assert spy.last["severity_color_fn"](js_file) is None
+
+
+def test_graph_severity_color_fn_is_none_for_files_missing_from_graph_nodes(qtbot, monkeypatch):
+    # `graph["nodes"]` puede no traer entrada para un path (ej. respuesta
+    # vieja mockeada) -- no debería reventar, solo no pintar halo.
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    spy = _spy_on_graph(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_graph_ready({"edges": SAMPLE_EDGES, "nodes": []})
+
+    py_file = next(f for f in spy.last["nodes"] if f["path"] == "src/main.py")
+    assert spy.last["severity_color_fn"](py_file) is None
+
+
+def test_first_graph_ready_does_a_full_reload(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    graph_spy = _spy_on_graph(view)
+    severity_spy = _spy_on_update_severity(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_graph_ready({"edges": SAMPLE_EDGES, "nodes": []})
+
+    assert len(graph_spy.calls) == 1
+    assert severity_spy.calls == []
+
+
+def test_second_graph_ready_only_updates_severity_in_place(qtbot, monkeypatch):
+    """Regresión del bug real reportado en vivo: un segundo refresco de
+    grafo sobre el MISMO índice (típico del polling, ver _on_poll_tick) no
+    debe volver a llamar a `set_graph` -- eso reiniciaba el layout de fuerzas
+    entero y el grafo "explotaba" reacomodándose cada pocos segundos."""
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    graph_spy = _spy_on_graph(view)
+    severity_spy = _spy_on_update_severity(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_graph_ready({"edges": SAMPLE_EDGES, "nodes": []})  # carga inicial
+    view._on_graph_ready(  # refresco posterior (mismo índice)
+        {
+            "edges": SAMPLE_EDGES,
+            "nodes": [{"path": "src/main.py", "language": "Python", "severity": "critical", "finding_count": 1}],
+        }
+    )
+
+    assert len(graph_spy.calls) == 1  # set_graph NO se llamó de nuevo
+    assert len(severity_spy.calls) == 1
+    assert severity_spy.last == {"src/main.py": "#ef4444"}
+
+
+def test_reindexing_forces_a_full_reload_again(qtbot, monkeypatch):
+    """Un reindexado real (el usuario tocó "Reindexar") sí puede cambiar la
+    topología del grafo (archivos agregados/borrados) -- tiene que volver a
+    ser una carga completa, no una actualización in-place."""
+    _patch_recent(monkeypatch)
+    _disable_real_threads(monkeypatch)  # este test dispara _on_index_ready dos veces
+
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    graph_spy = _spy_on_graph(view)
+    view._on_index_ready(SAMPLE_INDEX)
+    view._on_graph_ready({"edges": SAMPLE_EDGES, "nodes": []})  # carga inicial
+    view._on_graph_ready({"edges": SAMPLE_EDGES, "nodes": []})  # refresco in-place (no cuenta)
+
+    view._on_index_ready(SAMPLE_INDEX)  # reindexado
+    view._on_graph_ready({"edges": SAMPLE_EDGES, "nodes": []})
+
+    assert len(graph_spy.calls) == 2
+
+
+def test_risk_legend_shows_not_scanned_when_no_scan_ran(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_graph_ready({"edges": SAMPLE_EDGES, "nodes": []})
+
+    assert "sin escanear" in view.risk_legend._status_label.text()
+
+
+def test_risk_legend_shows_scan_timestamps_when_scanned(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_graph_ready(
+        {
+            "edges": SAMPLE_EDGES,
+            "nodes": [],
+            "security_scanned": True,
+            "security_scanned_at": "2026-07-29T00:00:00+00:00",
+            "quality_scanned": False,
+            "quality_scanned_at": None,
+        }
+    )
+
+    text = view.risk_legend._status_label.text()
+    assert "sin escanear" not in text
+    assert "seguridad" in text
 
 
 def test_clicking_a_node_populates_symbol_list(qtbot, monkeypatch):
@@ -361,3 +548,224 @@ def test_recent_project_does_not_override_typed_path(qtbot, monkeypatch):
     qtbot.wait(300)
 
     assert view.path_input.text() == "/tmp/lo-que-tipeo-el-usuario"
+
+
+# --------------------------------------------------------- panel de hallazgos
+
+_FINDINGS_SAMPLE = [
+    {"id": "f-crit", "tool": "bandit", "file": "src/main.py", "line": 10, "end_line": 10, "severity": "critical", "rule_id": "B608", "message": "sqli"},
+    {"id": "f-low", "tool": "ruff", "file": "src/main.py", "line": 3, "end_line": 3, "severity": "low", "rule_id": "F401", "message": "unused import"},
+]
+
+
+def test_on_file_ready_renders_findings_list(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_file_ready({"content": "code", "findings": _FINDINGS_SAMPLE})
+
+    assert view.findings_list.count() == 2
+    assert "B608" in view.findings_list.item(0).text()
+    assert "F401" in view.findings_list.item(1).text()
+
+
+def test_on_file_ready_with_no_findings_leaves_list_empty(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_file_ready({"content": "code", "findings": []})
+
+    assert view.findings_list.count() == 0
+
+
+def test_selecting_a_new_node_does_not_show_cascade_toast(qtbot, monkeypatch):
+    """Cambiar de archivo no es "arreglar algo" -- no hay base todavía para
+    comparar, así que no debe aparecer el toast solo por navegar."""
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_node_clicked("src/main.py")
+    view._on_file_ready({"content": "code", "findings": _FINDINGS_SAMPLE})
+
+    # `isVisible()` depende de que toda la cadena de ancestros esté shown()
+    # (la ventana de test nunca se muestra de verdad) -- `isHidden()` refleja
+    # el último show()/hide() explícito de ESTE widget, que es lo que importa acá.
+    assert view.cascade_toast.isHidden() is True
+
+
+def test_finding_resolved_between_polls_shows_cascade_toast(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    # Primera lectura: los dos hallazgos están presentes (fija la base).
+    view._on_node_clicked("src/main.py")
+    view._on_file_ready({"content": "code", "findings": _FINDINGS_SAMPLE})
+    assert view.cascade_toast.isHidden() is True
+
+    # Un poll posterior (mismo archivo seleccionado) ya no trae el crítico --
+    # se resolvió, típico tras aplicar un fix.
+    view._on_file_ready({"content": "code", "findings": [_FINDINGS_SAMPLE[1]]})
+
+    assert view.cascade_toast.isHidden() is False
+    assert "1 hallazgo" in view.cascade_toast.text()
+    assert "crítico" in view.cascade_toast.text()
+
+
+def test_cascade_toast_summarizes_multiple_resolved_severities(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_node_clicked("src/main.py")
+    view._on_file_ready({"content": "code", "findings": _FINDINGS_SAMPLE})
+    view._on_file_ready({"content": "code", "findings": []})
+
+    text = view.cascade_toast.text()
+    assert "2 hallazgo" in text
+    assert "crítico" in text
+    assert "bajo" in text
+
+
+def test_double_clicking_a_finding_moves_cursor_to_its_line(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+    view._on_node_clicked("src/main.py")
+    view._on_file_ready({"content": "\n".join(f"line{i}" for i in range(1, 21)), "findings": _FINDINGS_SAMPLE})
+
+    view._on_finding_double_clicked(view.findings_list.item(0))  # línea 10
+
+    assert view.code_viewer.textCursor().block().text() == "line10"
+
+
+def test_findings_highlight_their_lines_in_the_code_viewer(qtbot, monkeypatch):
+    """Bug real reportado en vivo: el doble click saltaba a la línea pero no
+    la marcaba de ninguna forma -- el código se veía plano. Ahora cada línea
+    con hallazgo (severidad alta/crítica/media, mismo criterio que el halo
+    del grafo) tiene un fondo de color en el visor, sin necesidad de volver a
+    mirar la lista de arriba."""
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+    view._on_node_clicked("src/main.py")
+
+    view._on_file_ready({"content": "\n".join(f"line{i}" for i in range(1, 21)), "findings": _FINDINGS_SAMPLE})
+
+    selections = view.code_viewer.extraSelections()
+    # Solo el crítico (línea 10) se resalta -- "low" no lleva halo/marca,
+    # mismo criterio que color_for_severity ya usa para el grafo 3D.
+    highlighted_lines = {sel.cursor.blockNumber() + 1 for sel in selections}
+    assert highlighted_lines == {10}
+
+
+def test_findings_highlight_updates_when_findings_change(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+    view._on_node_clicked("src/main.py")
+    content = "\n".join(f"line{i}" for i in range(1, 21))
+    view._on_file_ready({"content": content, "findings": _FINDINGS_SAMPLE})
+    assert len(view.code_viewer.extraSelections()) == 1
+
+    # El hallazgo crítico se resolvió -- el resaltado tiene que desaparecer.
+    view._on_file_ready({"content": content, "findings": []})
+
+    assert view.code_viewer.extraSelections() == []
+
+
+def test_selecting_a_new_node_clears_previous_highlights(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    _disable_real_threads(monkeypatch)  # este test clickea dos nodos distintos
+
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+    view._on_node_clicked("src/main.py")
+    view._on_file_ready({"content": "\n".join(f"line{i}" for i in range(1, 21)), "findings": _FINDINGS_SAMPLE})
+    assert len(view.code_viewer.extraSelections()) == 1
+
+    view._on_node_clicked("src/util.js")
+
+    assert view.code_viewer.extraSelections() == []
+
+
+# --------------------------------------------------------------- polling
+
+def test_poll_tick_does_nothing_without_a_loaded_project(qtbot, monkeypatch):
+    _patch_recent(monkeypatch)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    spy = _spy_on_graph(view)
+
+    view._on_poll_tick()
+
+    assert spy.calls == []
+
+
+def test_poll_tick_refetches_graph_when_project_loaded(qtbot, monkeypatch):
+    calls = {"graph": 0}
+
+    def fake_get(url, **kw):
+        if url == config.CODEBASE_GRAPH_URL:
+            calls["graph"] += 1
+        return _FakeResponse({"projects": [], "edges": [], "nodes": [], "content": "", "language": None, "path": ""})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_poll_tick()
+    qtbot.waitUntil(lambda: calls["graph"] >= 1, timeout=2000)
+
+
+def test_poll_tick_refetches_selected_file_findings(qtbot, monkeypatch):
+    calls = {"file": 0}
+
+    def fake_get(url, **kw):
+        if url == config.CODEBASE_FILE_URL:
+            calls["file"] += 1
+        return _FakeResponse({"projects": [], "edges": [], "nodes": [], "content": "code", "language": None, "path": "", "findings": []})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+    view._on_node_clicked("src/main.py")
+    qtbot.waitUntil(lambda: calls["file"] >= 1, timeout=2000)
+
+    calls["file"] = 0
+    view._on_poll_tick()
+
+    qtbot.waitUntil(lambda: calls["file"] >= 1, timeout=2000)
+
+
+def test_poll_tick_does_not_refetch_file_when_none_selected(qtbot, monkeypatch):
+    calls = {"file": 0}
+
+    def fake_get(url, **kw):
+        if url == config.CODEBASE_FILE_URL:
+            calls["file"] += 1
+        return _FakeResponse({"projects": [], "edges": [], "nodes": [], "content": "", "language": None, "path": ""})
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    view = CodebaseView()
+    qtbot.addWidget(view)
+    view._on_index_ready(SAMPLE_INDEX)
+
+    view._on_poll_tick()
+    qtbot.wait(300)
+
+    assert calls["file"] == 0

@@ -22,10 +22,11 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import QObject, QUrl, Signal, Slot
+from PySide6.QtCore import QObject, QSize, QTimer, QUrl, Signal, Slot
+from PySide6.QtGui import QResizeEvent
 from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
 
 _HTML_PATH = Path(__file__).resolve().parent / "web_assets" / "graph3d.html"
 
@@ -63,6 +64,47 @@ class GraphView(QWidget):
         self.web.load(QUrl.fromLocalFile(str(_HTML_PATH)))
         layout.addWidget(self.web, stretch=1)
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        # Bug real visto en vivo: la primera vez que esta vista se hace
+        # visible (ej. al entrar a la pestaña Codebase, que arranca oculta
+        # detrás de Chat), Chromium a veces nunca sincroniza su viewport real
+        # con el tamaño que Qt ya le dio al widget -- `window.innerWidth`
+        # queda en 0 del lado de la página aunque `self.web.size()` ya sea
+        # correcto, y el grafo entero queda en negro (reproducido con
+        # `--disable-gpu-compositing`, el flag de tray.py para el crash de la
+        # GPU AMD -- pinta ser una interacción entre ese modo y el mecanismo
+        # de "recién visible -> avisale al proceso de render" de QtWebEngine).
+        QTimer.singleShot(0, self._nudge_viewport_sync)
+
+    def _nudge_viewport_sync(self) -> None:
+        # OJO -- NO llamar a `self.web.resize(...)` acá. Versión anterior de
+        # este fix hacía justo eso (achicar/agrandar 1px la geometría real del
+        # widget) y funcionaba para destrabar el viewport, pero como `self.web`
+        # está dentro de un layout (QSplitter -> CodebaseView -> QMainWindow),
+        # ese resize directo sobre un widget administrado por layout dispara una
+        # re-evaluación de geometría que termina agrandando la VENTANA
+        # PRINCIPAL entera -- y Qt no la vuelve a achicar sola después (no hay
+        # "shrink to fit" automático para ventanas top-level), dejando la
+        # ventana permanentemente más ancha/alta. Bug real reportado en vivo
+        # ("la ventana se ve ultra alargada, no entra en mi pantalla"),
+        # reproducido y confirmado: el ancho saltaba de 900 a 1112px apenas se
+        # entraba a la pestaña Codebase, exactamente cuando este método corría.
+        #
+        # La solución es no tocar la geometría real del widget en absoluto --
+        # `QApplication.sendEvent` entrega un QResizeEvent sintético
+        # directamente al manejador de eventos de QWebEngineView (que sí
+        # dispara la sincronización de viewport con Chromium) sin pasar por el
+        # sistema de layouts, así que ni la ventana ni ningún widget cambia de
+        # tamaño de verdad -- verificado en vivo que el viewport igual queda
+        # sincronizado (`window.innerWidth` correcto) sin ningún efecto
+        # colateral en la geometría de la ventana.
+        size = self.web.size()
+        if not size.isValid() or size.width() <= 0 or size.height() <= 0:
+            return
+        fake_old_size = QSize(max(0, size.width() - 1), size.height())
+        QApplication.sendEvent(self.web, QResizeEvent(size, fake_old_size))
+
     def set_graph(
         self,
         nodes: list[dict],
@@ -70,15 +112,40 @@ class GraphView(QWidget):
         id_key: str,
         color_fn: Callable[[dict], str],
         label_fn: Callable[[dict], str],
+        severity_color_fn: Callable[[dict], str | None] | None = None,
     ) -> None:
+        def _node_payload(n: dict) -> dict:
+            node = {"id": n[id_key], "label": label_fn(n), "color": color_fn(n)}
+            severity_color = severity_color_fn(n) if severity_color_fn else None
+            # Solo se manda la clave si hay halo -- graph3d.html la trata como
+            # "sin marca" cuando falta, así no hace falta pasarle `null` por
+            # cada nodo sin hallazgos.
+            if severity_color:
+                node["severityColor"] = severity_color
+            return node
+
         payload = {
-            "nodes": [{"id": n[id_key], "label": label_fn(n), "color": color_fn(n)} for n in nodes],
+            "nodes": [_node_payload(n) for n in nodes],
             "links": [{"source": e["source"], "target": e["target"]} for e in edges],
         }
         if self._ready:
             self._push(payload)
         else:
             self._pending_payload = payload
+
+    def update_severity(self, severity_by_id: dict[str, str | None]) -> None:
+        """Actualiza SOLO el halo de severidad de nodos ya existentes, sin
+        recrear el dataset ni tocar el layout de fuerzas -- a diferencia de
+        `set_graph`. Pensado para refrescos periódicos sobre un grafo YA
+        cargado (ver CodebaseView._on_poll_tick): llamar a `set_graph` de
+        nuevo ahí reiniciaba el "calor" de la simulación de d3-force cada vez,
+        haciendo que el grafo entero se reacomodara de golpe cada pocos
+        segundos -- bug real reportado en vivo. Si la página todavía no
+        cargó, no hace nada (no tiene sentido encolar esto: `set_graph` ya se
+        habrá encargado de la carga inicial con la data completa)."""
+        if not self._ready:
+            return
+        self.web.page().runJavaScript(f"window.updateNodeSeverity({json.dumps(severity_by_id)});")
 
     def _on_load_finished(self, ok: bool) -> None:
         self._ready = ok

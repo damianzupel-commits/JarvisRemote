@@ -48,6 +48,25 @@ AUTHOR_COLORS: dict[str, str] = {
     "human": "#22c55e",
 }
 
+# Color del halo de riesgo en el grafo de Codebase (severidad máxima de
+# hallazgos de seguridad/calidad por archivo, ver `severity` en
+# `GET /api/codebase/graph`) -- capa aparte del color de relleno por lenguaje,
+# nunca lo reemplaza (ver graph_view.py::set_graph). "low"/"info" y cualquier
+# archivo sin escanear caen en `None` a propósito: no hay marca visual para
+# "sin hallazgos" ni para "no escaneado todavía", son indistinguibles por
+# diseño (ver requisito de no pintar un halo falso de "limpio").
+_SEVERITY_COLORS: dict[str, str] = {
+    "critical": "#ef4444",
+    "high": "#f97316",
+    "medium": "#eab308",
+}
+
+
+def color_for_severity(severity: str | None) -> str | None:
+    if not severity:
+        return None
+    return _SEVERITY_COLORS.get(severity)
+
 
 def color_for_language(language: str | None) -> str:
     if not language:
