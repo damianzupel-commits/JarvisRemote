@@ -112,6 +112,7 @@ from . import security_scan  # noqa: E402,F401
 from . import quality_scan  # noqa: E402,F401
 from . import code_edit  # noqa: E402,F401
 from . import audit_report  # noqa: E402,F401
+from . import network_scan  # noqa: E402,F401
 
 # generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
 # propósito, no importadas -- no es un problema de estilo, es una precaución

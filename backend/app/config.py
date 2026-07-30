@@ -152,6 +152,32 @@ class Settings:
         "QUALITY_SCAN_DIR", str(Path(__file__).resolve().parent.parent / "data" / "quality_scans")
     )
 
+    # nmap_scan (ver app/tools/network_scan.py + app/network/) -- reconocimiento
+    # de RED real (puertos, servicios, versiones, vulnerabilidades NSE), a
+    # diferencia de TODO el resto del pipeline (Semgrep/Bandit/cppcheck/
+    # clang-tidy/Trivy/Ruff/mypy/ESLint/tsc), que es SAST/SCA puro y solo lee
+    # código/manifiestos en disco, nunca toca una red real. Prendida por
+    # default porque el guardrail de scope (app/network/guardrail.py) ya la
+    # hace segura por diseño -- por default SOLO puede escanear rangos
+    # privados/reservados y Tailscale, nunca una IP pública, sin importar este
+    # flag. Poner en false desactiva la tool nmap_scan por completo sin tocar
+    # código, por si el usuario prefiere no exponerla ni siquiera con el
+    # guardrail de scope activo.
+    nmap_enabled: bool = _bool(os.getenv("NMAP_ENABLED"), True)
+
+    # Whitelist explícita de IPs/rangos PÚBLICOS (o cualquier otro por fuera del
+    # scope privado/loopback/Tailscale) autorizados para nmap_scan -- coma-
+    # separado, cada entrada una IP suelta o un CIDR (ej.
+    # "203.0.113.10,203.0.113.0/24"). VACÍO por default a propósito: el USUARIO
+    # tiene que llenar esto a mano, en su propio backend/.env, con
+    # infraestructura que sea suya o para la que tenga autorización explícita
+    # de escanear -- ni nmap_scan ni el LLM pueden agregarse un target nuevo
+    # acá por ningún argumento de la tool call (ver app/network/guardrail.py).
+    # Escanear una IP/dominio público sin autorización explícita del dueño
+    # puede ser ilegal (leyes de acceso no autorizado / computer fraud en la
+    # mayoría de países).
+    nmap_authorized_targets: str = os.getenv("NMAP_AUTHORIZED_TARGETS", "")
+
 
 settings = Settings()
 

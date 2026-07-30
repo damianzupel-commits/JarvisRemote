@@ -12,7 +12,12 @@ conectarse primero; este módulo solo le da la lista de candidatos ordenada
 import ipaddress
 import socket
 
-_TAILSCALE_RANGE = ipaddress.ip_network("100.64.0.0/10")
+# Público (no `_`) a propósito: es el mismo bloque fijo para CUALQUIER
+# instalación de Tailscale (no algo que se configure por red), así que
+# `app/network/guardrail.py` lo reusa tal cual para el scope de nmap_scan en
+# vez de redefinirlo -- evita tener dos implementaciones del mismo rango que
+# puedan divergir.
+TAILSCALE_RANGE = ipaddress.ip_network("100.64.0.0/10")
 _WINDOWS_HOTSPOT_RANGE = ipaddress.ip_network("192.168.137.0/24")
 
 # Directo (hotspot o LAN compartida) antes que Tailscale: si el celular está
@@ -24,7 +29,7 @@ def _classify(ip: str) -> str | None:
     addr = ipaddress.ip_address(ip)
     if addr.is_loopback or addr.is_link_local:
         return None
-    if addr in _TAILSCALE_RANGE:
+    if addr in TAILSCALE_RANGE:
         return "tailscale"
     if addr in _WINDOWS_HOTSPOT_RANGE:
         return "hotspot"

@@ -346,6 +346,37 @@ las tool calls automáticamente contra el registry.
   Cualquier comando/lanzamiento que no matchee esos patrones se ejecuta igual
   sin restricciones; un atacante (o el propio modelo, por error) puede lograr
   el mismo resultado destructivo por una ruta que el blocklist no cubra.
+- **`nmap_scan` es la primera tool del proyecto que toca una red REAL, no solo
+  código/archivos locales en disco** (a diferencia de
+  `security_scan_project`/`quality_scan_project`, que son SAST/SCA puro).
+  Escanear una IP/dominio que no es tuyo y sin autorización explícita del
+  dueño puede ser ilegal (leyes de acceso no autorizado / computer fraud en la
+  mayoría de países), así que tiene el guardrail de scope más estricto de
+  todo el proyecto — un chequeo técnico real
+  (`app/network/guardrail.py::resolve_and_authorize`), no una convención de
+  prompt: por default SOLO puede escanear rangos privados/reservados
+  (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback
+  (`127.0.0.0/8`) y el rango fijo de Tailscale (`100.64.0.0/10`). Cualquier
+  IP/dominio público se rechaza antes de ejecutar nmap, salvo que esté en
+  `NMAP_AUTHORIZED_TARGETS` (`backend/.env`) — una whitelist vacía por
+  default que **solo el usuario llena a mano**; ni la tool ni el LLM pueden
+  agregarse un target nuevo por ningún argumento de la tool call. Gateada
+  además por `NMAP_ENABLED=true` (default; el guardrail de scope ya la hace
+  segura por diseño aun con la tool prendida) y auditada vía
+  `app/audit_log.py` (target/scan_type/aceptado-o-rechazado en cada intento).
+  **Instalación de nmap: manual, no automatizable.** El instalador oficial de
+  Windows (https://nmap.org/download.html) empaqueta el driver Npcap, que
+  requiere un click de UAC para instalarse (un driver de captura de paquetes
+  a nivel kernel no se puede instalar sin privilegios de administrador — no
+  existe un build portable/sin-admin oficial que lo evite). Este proyecto no
+  automatiza ese paso a propósito (mismo criterio que otras instalaciones que
+  requieren UAC, ver limitaciones conocidas de Windows más abajo): corré el
+  instalador vos mismo una vez, aceptando también instalar Npcap cuando lo
+  pida. Sin Npcap, `nmap.exe` igual corre pero solo puede hacer TCP connect
+  scan (`-sT`, vía WinSock normal) sin ping ICMP real ni SYN scan ni
+  detección de SO — por eso todos los `scan_type` de `nmap_scan` usan
+  `-sT -Pn` (ver `app/network/scanner.py`), para funcionar igual sin Npcap
+  aunque se pierdan esas capacidades más avanzadas.
 - **La conexión celular↔PC viaja en texto plano (`ws://`, no `wss://`) — TLS
   está preparado pero apagado (`TLS_ENABLED=false` default).** Ver
   `backend/certs/README.md`: hay un certificado self-signed listo para generar
