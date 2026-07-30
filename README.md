@@ -25,7 +25,22 @@ al mercado**.
   (frontmatter YAML, abribles con Obsidian de verdad), enlazadas entre sí por
   wikilinks (`[[nota]]`) igual que en el grafo de código. Pestaña "Obsidian"
   en la ventana de PC, con autoría separada entre lo que escribe Jarvis y lo
-  que escribís vos.
+  que escribís vos. Incluye una base de conocimiento de ciberseguridad ya
+  cargada (OWASP Top 10, por vulnerabilidad, por herramienta SAST/SCA).
+- **Escaneo de seguridad y calidad real, no inventado por el LLM**: corre
+  Semgrep, Bandit, cppcheck, clang-tidy y Trivy (seguridad) y Ruff/mypy
+  (calidad) como subprocesos reales sobre el proyecto indexado, cachea el
+  resultado, y lo muestra en la pestaña Codebase como un halo de severidad
+  por archivo en el grafo y una lista de hallazgos ordenada por severidad con
+  la línea resaltada en el visor de código.
+- **Aplicar fixes de forma reversible**: cada fix aplicado por la IA queda en
+  su propio commit de git, revertible con `git revert` sin tocar nada más que
+  ese archivo -- y si arreglar un hallazgo resuelve otros de rebote, la
+  pestaña Codebase lo avisa.
+- **Ejecutar comandos reales en la PC** (`pc_run_command`): instalar
+  dependencias, correr tests/builds, git, etc., con blocklist de patrones
+  destructivos y auditoría persistente (no es un sandbox real, ver el README
+  de `backend/` para el detalle de qué cubre y qué no).
 - **El objetivo**: darle a la IA (o a un auditor humano) el mapa completo del
   proyecto -- estructura + contexto -- para poder revisar el código en busca
   de vulnerabilidades antes de shippear, en vez de auditar a ciegas archivo

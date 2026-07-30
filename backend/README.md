@@ -30,6 +30,12 @@ Editá `.env`:
   `true`. No confundir con la conexión del celular en sí (eso lo prende el
   usuario desde la app Android) — este flag es una segunda llave del lado del
   backend, específica para la tool más invasiva.
+- `PC_SHELL_ENABLED`: mismo criterio que `PHONE_SHELL_ENABLED` pero para
+  `pc_run_command` (shell real en la PC, no solo tools puntuales). Default
+  `true`.
+- `SECURITY_SCAN_DIR` / `QUALITY_SCAN_DIR`: dónde se cachea el último escaneo
+  de seguridad/calidad por proyecto (`app/security/`, `app/quality/`). Por
+  default `backend/data/security_scans` y `backend/data/quality_scans`.
 - `TLS_ENABLED`: sirve `https://`/`wss://` en vez de texto plano. **Preparado
   pero apagado por default** — ver `backend/certs/README.md` antes de tocar
   esto, activarlo a lo loco corta el acceso de la app.
@@ -185,16 +191,43 @@ pytest
   `run_clang_tidy`), Trivy si el binario está instalado -- no viene por pip,
   instalación aparte), `store.py` (cachea el último escaneo por
   proyecto en `settings.security_scan_dir`, gitignored, para que
-  `security_apply_fix` pueda resolver un `finding_id` sin re-escanear),
-  `fixer.py` (aplica un fix puntual: dry-run con diff por default, y si se
-  confirma, escribe + commitea SOLO ese archivo en un commit propio y
-  reversible con `git revert`, sin tocar nada más que esté en stage).
+  `security_apply_fix` pueda resolver un `finding_id` sin re-escanear).
+- `app/quality/` — mismo esquema que `app/security/` pero para bugs/calidad
+  general (no seguridad): `scanners.py`/`runner.py` corren Ruff/mypy siempre
+  que hay Python (ESLint/tsc para JS/TS y detekt para Kotlin si están
+  instalados aparte, no vienen por pip), `store.py` cachea en
+  `settings.quality_scan_dir` (carpeta separada de la de seguridad).
+- `app/findings/` — agrega los dos caches (seguridad + calidad) en un único
+  índice de riesgo por archivo (`severity_index.py`, consumido por
+  `GET /api/codebase/graph` y `/file` para el halo del grafo y el panel de
+  hallazgos), con `noise.py` (ruido conocido por escáner que se excluye) y
+  `binaries.py` (evita intentar escanear binarios).
+- `app/codeedit/fixer.py` — aplica un fix de un solo archivo: dry-run con
+  diff por default, y si se confirma, escribe + commitea SOLO ese archivo en
+  un commit propio y reversible con `git revert`, sin tocar nada más que esté
+  en stage. Usado tanto por `security_apply_fix`/`code_apply_fix` como por
+  `fs_write_file` cuando el archivo cae dentro de un proyecto ya indexado.
 - `app/tools/security_scan.py` — `security_scan_project`, `security_get_finding`,
   `security_apply_fix`. El flujo esperado: escanear (herramienta real) →
   interpretar cada hallazgo consultando `obsidian_search_notes` (la base de
   conocimiento de ciberseguridad ya tiene notas por vulnerabilidad/OWASP/cómo
   leer falsos positivos de cada escáner) → si hay fix seguro, aplicarlo con
   `confirm=true` recién en una segunda llamada explícita, nunca de una.
+- `app/tools/quality_scan.py` — mismo flujo que `security_scan.py` pero para
+  `app/quality/` (`quality_scan_project`, `quality_get_finding`,
+  `quality_apply_fix`).
+- `app/tools/code_edit.py` — `code_apply_fix`: mismo circuito de
+  `app/codeedit/fixer.py` que las tools de seguridad/calidad, pero para
+  ediciones puntuales que no vienen de un finding de escáner.
+- `app/audit_report.py` / `app/tools/audit_report.py` — `audit_generate_report`:
+  arma un resumen en Markdown (hallazgos de seguridad/calidad + fixes
+  realmente aplicados, consultando `app/audit_log.py`) y lo guarda como nota
+  del vault de Obsidian.
+- `app/tools/pc_command.py` — `pc_run_command`: shell real y arbitrario en la
+  PC (análogo de `phone_run_command` del lado de la PC, no solo tools
+  puntuales -- instalar dependencias, correr tests/builds, git, etc.). Mismo
+  criterio de blocklist + auditoría que el resto de las tools invasivas, gate
+  en `PC_SHELL_ENABLED`.
 - `app/main.py` — endpoints `GET /api/health` y `POST /api/chat`.
 
 ## Agregar una tool nueva
@@ -298,10 +331,15 @@ las tool calls automáticamente contra el registry.
   `PHONE_SHELL_ENABLED=true` (default), y cada comando se loguea (herramienta,
   argumentos, timestamp) en `phone_link.dispatch_to_phone` vía el logger
   `jarvis.phone_link`, como rastro de auditoría dado el nivel de riesgo.
+- **`pc_run_command` es el mismo nivel de riesgo que `phone_run_command`, pero
+  del lado de la PC**: shell real y arbitrario (`cmd`/PowerShell según lo que
+  resuelva el sistema), no acotado a tools puntuales. Gateada por
+  `PC_SHELL_ENABLED=true` (default) y auditada vía `app/audit_log.py`.
 - **Blocklist de comandos/lanzamientos obviamente destructivos** —
   `phone_link._check_command_blocklist` (para `phone_run_command`: `rm -rf` de
   la raíz/home, `mkfs`, `dd` hacia un block device, fork bombs, `chmod`/`chown -R`
-  sobre la raíz) y `desktop._check_launch_blocklist` (para `desktop_launch_app`:
+  sobre la raíz), `pc_command._check_command_blocklist` (mismo espíritu para
+  `pc_run_command`) y `desktop._check_launch_blocklist` (para `desktop_launch_app`:
   `format`, `diskpart`, `cipher /w`, `vssadmin delete`, `bcdedit`). **Esto es una
   mitigación de "evitar el desastre obvio" por matching de texto sobre patrones
   conocidos — no es un sandbox real ni una garantía de seguridad completa.**
