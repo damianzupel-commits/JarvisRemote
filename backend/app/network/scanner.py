@@ -14,10 +14,23 @@ un ping previo, asume el host arriba -- razonable para escanear infraestructura
 propia ya autorizada por el guardrail). `-sV` (detección de servicio/versión)
 y `--script vuln` (NSE) funcionan igual sin Npcap: operan sobre la conexión ya
 establecida, no necesitan captura de paquetes cruda.
+
+Este módulo también arma (`build_termux_nmap_command`) y parsea
+(`parse_phone_scan_result`) escaneos que corren del lado del CELULAR en vez de
+la PC (ver `app/tools/network_scan.py::phone_nmap_scan`) -- reusa los mismos
+`_SCAN_TYPE_ARGS` y el mismo parser de XML (`_parse_scan_xml`) que el camino de
+PC, porque Termux sin root tiene la misma limitación que Windows sin Npcap
+(solo TCP connect scan, sin SYN/OS detection), así que los presets son
+idénticos. La ejecución real en el celular no pasa por `subprocess` de acá --
+la tool arma el string de comando acá pero lo despacha por WebSocket a Termux
+vía `phone_run_command` (`app/phone_link.py::dispatch_to_phone`), y le pasa el
+stdout/stderr/exit_code que vuelve a `parse_phone_scan_result` de acá para
+reusar el mismo parser en vez de duplicarlo.
 """
 
 from __future__ import annotations
 
+import shlex
 import shutil
 import subprocess
 import sys
@@ -144,6 +157,57 @@ def _parse_ports(host_el: ET.Element, host_ip: str, hostname: str | None) -> lis
     return findings
 
 
+def _parse_scan_xml(
+    xml_text: str,
+    *,
+    target: str,
+    scan_type: str,
+    command: list[str],
+    started_at: str,
+    finished_at: str,
+) -> NetworkScanResult:
+    """Convierte el XML crudo de `nmap -oX -` (venga de un subprocess local o
+    del stdout devuelto por Termux) en un `NetworkScanResult` -- compartido
+    entre el camino de PC (`run_nmap_scan`) y el de celular
+    (`parse_phone_scan_result`) para no duplicar el parseo."""
+    try:
+        xml_root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        raise RuntimeError(f"nmap no devolvió XML válido: {exc}") from exc
+
+    findings: list[PortFinding] = []
+    hosts_up = 0
+    for host_el in xml_root.findall("host"):
+        status_el = host_el.find("status")
+        if status_el is not None and status_el.get("state") != "up":
+            continue
+        hosts_up += 1
+
+        addr_el = host_el.find("address[@addrtype='ipv4']")
+        if addr_el is None:
+            addr_el = host_el.find("address")
+        host_ip = addr_el.get("addr", target) if addr_el is not None else target
+
+        hostname_el = host_el.find("hostnames/hostname")
+        hostname = hostname_el.get("name") if hostname_el is not None else None
+
+        findings.extend(_parse_ports(host_el, host_ip, hostname))
+
+    finished_stats_el = xml_root.find("runstats/finished")
+    raw_summary = finished_stats_el.get("summary", "") if finished_stats_el is not None else ""
+
+    return NetworkScanResult(
+        target=target,
+        scan_type=scan_type,
+        command=command,
+        started_at=started_at,
+        finished_at=finished_at,
+        hosts_up=hosts_up,
+        findings=findings,
+        raw_summary=raw_summary,
+    )
+
+
 def run_nmap_scan(target: str, scan_type: str = "quick", timeout: float = _DEFAULT_TIMEOUT_SECONDS) -> NetworkScanResult:
     """Corre nmap real contra `target` (YA validado por el guardrail antes de
     llegar acá -- este wrapper no vuelve a chequear scope). `-oX -` pide el
@@ -180,38 +244,81 @@ def run_nmap_scan(target: str, scan_type: str = "quick", timeout: float = _DEFAU
     finished_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        xml_root = ET.fromstring(proc.stdout)
-    except ET.ParseError:
-        raise RuntimeError(f"nmap no devolvió XML válido (exit={proc.returncode}): {proc.stderr[:1000]}")
+        return _parse_scan_xml(
+            proc.stdout,
+            target=target,
+            scan_type=scan_type,
+            command=cmd,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} (exit={proc.returncode}): {proc.stderr[:1000]}") from exc
 
-    findings: list[PortFinding] = []
-    hosts_up = 0
-    for host_el in xml_root.findall("host"):
-        status_el = host_el.find("status")
-        if status_el is not None and status_el.get("state") != "up":
-            continue
-        hosts_up += 1
 
-        addr_el = host_el.find("address[@addrtype='ipv4']")
-        if addr_el is None:
-            addr_el = host_el.find("address")
-        host_ip = addr_el.get("addr", target) if addr_el is not None else target
+class NmapNotInstalledOnPhoneError(RuntimeError):
+    """El paquete nmap de Termux no está instalado en el celular."""
 
-        hostname_el = host_el.find("hostnames/hostname")
-        hostname = hostname_el.get("name") if hostname_el is not None else None
 
-        findings.extend(_parse_ports(host_el, host_ip, hostname))
+_PHONE_NOT_FOUND_MARKERS = (
+    "nmap: not found",
+    "nmap: command not found",
+    "no such file or directory",
+)
 
-    finished_stats_el = xml_root.find("runstats/finished")
-    raw_summary = finished_stats_el.get("summary", "") if finished_stats_el is not None else ""
 
-    return NetworkScanResult(
-        target=target,
-        scan_type=scan_type,
-        command=cmd,
-        started_at=started_at,
-        finished_at=finished_at,
-        hosts_up=hosts_up,
-        findings=findings,
-        raw_summary=raw_summary,
-    )
+def build_termux_nmap_command(target: str, scan_type: str = "quick") -> str:
+    """Arma el mismo comando de `nmap -oX -` que `run_nmap_scan`, pero como un
+    string listo para mandar como `command` a la tool `phone_run_command`
+    (que lo corre como `bash -c "<command>"` dentro de Termux) -- usa el
+    binario `nmap` tal cual (sin ruta absoluta: se asume en el PATH de Termux,
+    que es donde `pkg install nmap` lo deja) en vez de la ruta resuelta de
+    `_nmap_path()`, que es específica de la PC. `shlex.join` escapa cada
+    argumento (relevante para `target` si es un CIDR u otro string con
+    caracteres que el shell podría interpretar)."""
+    if scan_type not in _SCAN_TYPE_ARGS:
+        raise InvalidScanTypeError(f"scan_type '{scan_type}' inválido -- opciones: {sorted(_SCAN_TYPE_ARGS)}")
+    return shlex.join(["nmap", *_SCAN_TYPE_ARGS[scan_type], "-oX", "-", target])
+
+
+def parse_phone_scan_result(
+    phone_result: dict,
+    *,
+    target: str,
+    scan_type: str,
+    command: list[str],
+    started_at: str,
+    finished_at: str,
+) -> NetworkScanResult:
+    """Convierte el resultado crudo de `phone_run_command` (stdout/stderr/
+    exit_code, ver `TermuxCommandRunner.kt`) en un `NetworkScanResult` --
+    contraparte de `run_nmap_scan` para el camino de celular. Detecta el caso
+    más probable en la práctica (nmap no instalado en Termux todavía) y lo
+    convierte en un error explícito en vez de dejar que el parseo de XML
+    falle con un mensaje genérico."""
+    stdout = phone_result.get("stdout") or ""
+    stderr = phone_result.get("stderr") or ""
+    exit_code = phone_result.get("exit_code")
+    termux_error = phone_result.get("termux_error")
+
+    if termux_error:
+        raise RuntimeError(f"Termux rechazó el comando antes de correrlo: {termux_error}")
+
+    lowered = f"{stdout}\n{stderr}".lower()
+    if exit_code == 127 or any(marker in lowered for marker in _PHONE_NOT_FOUND_MARKERS):
+        raise NmapNotInstalledOnPhoneError(
+            "nmap no está instalado en Termux (celular). Desde la app Termux (sin necesitar "
+            "root): 'pkg install nmap'. " + (f"stderr: {stderr[:500]}" if stderr else "")
+        )
+
+    try:
+        return _parse_scan_xml(
+            stdout,
+            target=target,
+            scan_type=scan_type,
+            command=command,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"{exc} (exit_code={exit_code}): {stderr[:1000]}") from exc

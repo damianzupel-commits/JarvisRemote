@@ -377,6 +377,25 @@ las tool calls automáticamente contra el registry.
   detección de SO — por eso todos los `scan_type` de `nmap_scan` usan
   `-sT -Pn` (ver `app/network/scanner.py`), para funcionar igual sin Npcap
   aunque se pierdan esas capacidades más avanzadas.
+- **`phone_nmap_scan` es la contraparte de `nmap_scan` que escanea desde el
+  CELULAR en vez de la PC** (ver `app/tools/network_scan.py`) — necesaria
+  porque el backend corre en la PC de casa del usuario, que no tiene
+  visibilidad de ninguna red a la que el celular esté conectado (dos redes
+  físicas separadas, aunque el celular hable con Jarvis por Tailscale). Útil
+  para auditar la red de un tercero (ej. la wifi de un local que dio la
+  contraseña) sin instalar nada ni llevar una notebook: el escaneo corre
+  desde el dispositivo que sí está en esa red. Comparte el MISMO guardrail de
+  scope no negociable que `nmap_scan` (`resolve_and_authorize`) — correr
+  desde el celular no lo relaja. No abre un canal nuevo del lado de Android:
+  arma el comando de nmap en el backend y lo despacha reusando literalmente
+  `phone_run_command`/Termux (`app/phone_link.py::dispatch_to_phone`), así que
+  hereda sus mismos requisitos (Termux instalado desde F-Droid,
+  `allow-external-apps=true`, permiso `RUN_COMMAND` otorgado,
+  `PHONE_SHELL_ENABLED=true`) más uno propio: **el paquete `nmap` de Termux
+  tiene que estar instalado a mano** (`pkg install nmap` dentro de Termux, no
+  necesita root — soporta TCP connect scan y NSE, no SYN scan/detección de
+  SO, misma limitación que la PC sin Npcap). Si falta, la tool falla con un
+  mensaje explícito en vez de asumir que corrió.
 - **La conexión celular↔PC viaja en texto plano (`ws://`, no `wss://`) — TLS
   está preparado pero apagado (`TLS_ENABLED=false` default).** Ver
   `backend/certs/README.md`: hay un certificado self-signed listo para generar

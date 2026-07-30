@@ -156,6 +156,92 @@ def test_scan_type_args_never_include_privileged_flags():
         assert "-O" not in args, scan_type
 
 
+def test_build_termux_nmap_command_uses_bare_nmap_and_quotes_target():
+    """A diferencia de `run_nmap_scan` (que resuelve una ruta absoluta con
+    `_nmap_path()`, específica de la PC), el comando para Termux usa el
+    binario `nmap` tal cual -- se asume en el PATH de Termux (`pkg install
+    nmap` lo deja ahí)."""
+    command = scanner.build_termux_nmap_command("192.168.1.0/24", scan_type="quick")
+
+    assert command.startswith("nmap ")
+    assert "192.168.1.0/24" in command
+    assert "-oX" in command
+    assert "-sT" in command and "-Pn" in command
+
+
+def test_build_termux_nmap_command_raises_on_invalid_scan_type():
+    with pytest.raises(scanner.InvalidScanTypeError):
+        scanner.build_termux_nmap_command("192.168.1.1", scan_type="not-a-real-type")
+
+
+def test_parse_phone_scan_result_parses_successful_xml():
+    phone_result = {"stdout": _FAKE_NMAP_XML_OPEN_PORTS, "stderr": "", "exit_code": 0}
+
+    result = scanner.parse_phone_scan_result(
+        phone_result,
+        target="127.0.0.1",
+        scan_type="quick",
+        command=["nmap", "-oX", "-", "127.0.0.1"],
+        started_at="2026-07-29T00:00:00+00:00",
+        finished_at="2026-07-29T00:00:01+00:00",
+    )
+
+    assert result.hosts_up == 1
+    assert len(result.findings) == 2
+
+
+def test_parse_phone_scan_result_detects_missing_nmap_package():
+    """El caso más probable en la práctica: Termux sin `pkg install nmap`
+    corrido todavía -- tiene que fallar con un mensaje explícito, no con un
+    error genérico de XML inválido."""
+    phone_result = {
+        "stdout": "",
+        "stderr": "bash: line 1: nmap: command not found",
+        "exit_code": 127,
+    }
+
+    with pytest.raises(scanner.NmapNotInstalledOnPhoneError, match="pkg install nmap"):
+        scanner.parse_phone_scan_result(
+            phone_result,
+            target="192.168.1.1",
+            scan_type="quick",
+            command=["nmap", "-oX", "-", "192.168.1.1"],
+            started_at="2026-07-29T00:00:00+00:00",
+            finished_at="2026-07-29T00:00:01+00:00",
+        )
+
+
+def test_parse_phone_scan_result_raises_on_termux_plugin_error():
+    """`errmsg` (mapeado acá a `termux_error`) es la señal confiable de que
+    Termux rechazó el comando a nivel plugin (permiso, config) -- ver
+    docstring de TermuxCommandRunner.kt."""
+    phone_result = {"termux_error": "Missing RUN_COMMAND permission"}
+
+    with pytest.raises(RuntimeError, match="Missing RUN_COMMAND permission"):
+        scanner.parse_phone_scan_result(
+            phone_result,
+            target="192.168.1.1",
+            scan_type="quick",
+            command=["nmap", "-oX", "-", "192.168.1.1"],
+            started_at="2026-07-29T00:00:00+00:00",
+            finished_at="2026-07-29T00:00:01+00:00",
+        )
+
+
+def test_parse_phone_scan_result_raises_on_invalid_xml():
+    phone_result = {"stdout": "not xml at all", "stderr": "", "exit_code": 0}
+
+    with pytest.raises(RuntimeError):
+        scanner.parse_phone_scan_result(
+            phone_result,
+            target="192.168.1.1",
+            scan_type="quick",
+            command=["nmap", "-oX", "-", "192.168.1.1"],
+            started_at="2026-07-29T00:00:00+00:00",
+            finished_at="2026-07-29T00:00:01+00:00",
+        )
+
+
 @pytest.mark.timeout(60)
 def test_run_nmap_scan_real_localhost():
     """Escaneo real (no mockeado) contra 127.0.0.1 -- se saltea si nmap no
