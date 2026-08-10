@@ -5,6 +5,7 @@ plano o se llegue al tope de iteraciones.
 
 import json
 import logging
+from typing import Any
 
 from .config import settings
 from .llm_client import client
@@ -187,11 +188,73 @@ def _build_image_message(result: dict) -> dict:
     )
 
 
+def _cap_tool_result(result: Any, max_chars: int) -> Any:
+    """Recorta un resultado de tool cuyo JSON serializado supera `max_chars` --
+    protección aparte de `_trim_history` (que poda por CANTIDAD de mensajes, no por
+    tamaño): un solo tool result gigante (ej. security_scan_project sobre un
+    proyecto con cientos de hallazgos, ~47KB de JSON real visto en pygoat) puede
+    consumir sola casi toda la ventana de contexto real del modelo, desplazando el
+    system prompt y el pedido original del usuario fuera de contexto sin que
+    `_trim_history` lo detecte (sigue siendo "un solo mensaje").
+
+    Si `result` es un dict con algún campo lista (típicamente 'findings' o similar),
+    recorta esa lista al tamaño más grande que entre en el presupuesto y deja
+    constancia de cuántos items se omitieron -- mismo patrón que ya usan
+    security_scan_project/quality_scan_project con su cap de 100, pero por tamaño
+    real en vez de cantidad fija de items. Si no hay campo lista que recortar
+    (resultado ya es chico en estructura pero con algún string enorme, u otro tipo),
+    cae a un truncado de texto plano como último recurso."""
+    serialized = json.dumps(result, default=str, ensure_ascii=False)
+    if len(serialized) <= max_chars:
+        return result
+
+    if isinstance(result, dict):
+        list_keys = [k for k, v in result.items() if isinstance(v, list) and v]
+        if list_keys:
+            biggest_key = max(
+                list_keys,
+                key=lambda k: len(json.dumps(result[k], default=str, ensure_ascii=False)),
+            )
+            items = result[biggest_key]
+
+            def _build(n: int) -> dict:
+                candidate = dict(result)
+                candidate[biggest_key] = items[:n]
+                candidate[f"{biggest_key}_omitted_by_size_limit"] = len(items) - n
+                candidate["_note"] = (
+                    f"Resultado recortado: '{biggest_key}' tenía {len(items)} items, se mandaron "
+                    f"{n} para no exceder el contexto del modelo. Si necesitás el resto, "
+                    "pedí un filtro más específico o llamá la tool de nuevo con más detalle puntual."
+                )
+                return candidate
+
+            # Búsqueda binaria sobre la CANDIDATA COMPLETA (incluyendo la nota, no
+            # solo la lista recortada) -- si se bisecta sin la nota y recién se
+            # agrega al final, el resultado final puede terminar pasándose del
+            # presupuesto por el tamaño de la nota misma.
+            lo, hi = 0, len(items)
+            best_n = 0
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                if len(json.dumps(_build(mid), default=str, ensure_ascii=False)) <= max_chars:
+                    best_n = mid
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+            return _build(best_n)
+
+    return {
+        "_note": "Resultado recortado: era demasiado grande para mandarlo entero sin exceder el contexto del modelo.",
+        "truncated_content": serialized[:max_chars],
+    }
+
+
 def _trim_history(history: list[dict], max_messages: int) -> None:
     """Recorta `history` in-place si el cuerpo (todo menos el system prompt en
     [0]) supera `max_messages`. Corta siempre en el próximo mensaje 'role':'user'
     para no dejar un tool_call sin su respuesta (o viceversa), lo cual rompe el
-    pedido al modelo. Corte simple por cantidad de mensajes, no por tokens reales."""
+    pedido al modelo. Corte simple por cantidad de mensajes, no por tokens reales
+    -- ver `_trim_history_by_budget` para la poda que sí mira tamaño real."""
     body = history[1:]
     excess = len(body) - max_messages
     if excess <= 0:
@@ -202,14 +265,73 @@ def _trim_history(history: list[dict], max_messages: int) -> None:
     history[1:] = body[cut:]
 
 
+def _history_char_budget(tools_schema_chars: int) -> int:
+    """Cuántos caracteres de `history` (todo menos el system prompt en [0]) entran
+    sin superar el contexto REAL del modelo cargado, dejando aparte margen para
+    que pueda generar una respuesta después de "leer" todo el prompt.
+
+    Bug real 2026-08-09: con 51 tools ya registradas, el system prompt (~9.7KB)
+    + el schema de tools (~42KB) SOLOS ya representan ~13-16k tokens estimados
+    contra un num_ctx de 16384 -- `_trim_history` (poda por CANTIDAD de
+    mensajes) y `_cap_tool_result` (acota UN SOLO mensaje) no alcanzan a
+    evitarlo: varios tool results medianos, cada uno ya bajo su propio tope
+    individual, sumados igual superan lo poco que queda de contexto. Un pedido
+    real (security_scan_project sobre pygoat) llegó a 16372/16384 tokens de
+    prompt, tardó varios minutos SOLO en prompt-processing (con `ollama ps`
+    reportando carga mixta CPU/GPU, el throughput se degrada con el contexto en
+    este hardware) y nunca llegó a generar respuesta -- el contexto real del
+    modelo se subió a 32768 (ver MODEL_CONTEXT_TOKENS) para dar aire, pero este
+    presupuesto es la protección de fondo: sin importar qué tan grande se ponga
+    el schema de tools a futuro (quedan creciendo con cada tool nueva que se
+    registra), esto SIEMPRE deja margen real para el system prompt y la
+    respuesta, recalculando en cada turno en vez de asumir un tamaño fijo."""
+    available_tokens = settings.model_context_tokens - settings.reserved_response_tokens
+    available_chars = available_tokens * settings.chars_per_token_estimate
+    baseline_chars = len(SYSTEM_PROMPT) + tools_schema_chars
+    return max(0, int(available_chars - baseline_chars))
+
+
+def _trim_history_by_budget(history: list[dict], budget_chars: int) -> None:
+    """Poda `history` in-place (todo menos el system prompt en [0]) hasta que el
+    JSON serializado del cuerpo entre en `budget_chars` -- backstop de TAMAÑO
+    real, complementario a `_trim_history` (cantidad de mensajes) y
+    `_cap_tool_result` (un solo mensaje). Ver `_history_char_budget` para el
+    bug real que lo motivó. Mismo criterio de corte que `_trim_history`: corta
+    siempre en el próximo mensaje 'role':'user', para no separar un tool_call
+    de su respuesta."""
+    body = history[1:]
+    if not body:
+        return
+
+    def _fits(msgs: list[dict]) -> bool:
+        return len(json.dumps(msgs, default=str, ensure_ascii=False)) <= budget_chars
+
+    if _fits(body):
+        return
+
+    cut = 0
+    while cut < len(body):
+        cut += 1
+        while cut < len(body) and body[cut].get("role") != "user":
+            cut += 1
+        if _fits(body[cut:]):
+            break
+    history[1:] = body[cut:]
+
+
 async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str, list[dict]]:
     conv_id = conversation_id or "default"
+    tools = openai_tool_schemas()
+    # Se mide una sola vez por turno (no cambia mientras corre run_agent) y se
+    # reusa en cada pasada del loop de abajo -- ver _history_char_budget.
+    history_budget_chars = _history_char_budget(len(json.dumps(tools, default=str, ensure_ascii=False)))
+
     history = _conversations.setdefault(conv_id, [{"role": "system", "content": SYSTEM_PROMPT}])
     history.append({"role": "user", "content": message})
     _trim_history(history, settings.max_history_messages)
+    _trim_history_by_budget(history, history_budget_chars)
 
     tool_log: list[dict] = []
-    tools = openai_tool_schemas()
     # Si el turno anterior le acaba de mandar una imagen al modelo (ver
     # `_build_image_message`), la próxima llamada puede fallar con un modelo que no
     # sea de visión — en ese caso no hay que crashear, hay que avisarle al usuario
@@ -221,6 +343,7 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
         # tool calls puede hacer crecer `history` varias veces dentro del
         # mismo `run_agent`, antes de volver a pasar por la poda de arriba.
         _trim_history(history, settings.max_history_messages)
+        _trim_history_by_budget(history, history_budget_chars)
         # La nota de estado se arma de nuevo en cada vuelta del loop (por si el celular
         # se conecta/desconecta durante una tarea larga) y no se guarda en `history`:
         # así siempre es el estado real al momento de la llamada, no una foto vieja que
@@ -323,11 +446,14 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                     )
                     awaiting_vision_response = True
                 else:
+                    capped_result = _cap_tool_result(result, settings.max_tool_result_chars)
+                    if capped_result is not result:
+                        tool_log[-1]["result"] = capped_result
                     history.append(
                         {
                             "role": "tool",
                             "tool_call_id": tc.id,
-                            "content": json.dumps(result, default=str, ensure_ascii=False),
+                            "content": json.dumps(capped_result, default=str, ensure_ascii=False),
                         }
                     )
             continue

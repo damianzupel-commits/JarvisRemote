@@ -23,6 +23,18 @@ class Settings:
     lmstudio_base_url: str = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
     lmstudio_model: str = os.getenv("LMSTUDIO_MODEL", "local-model")
 
+    # Server + modelo de embeddings para memoria semántica del vault (ver
+    # app/obsidian/embeddings.py). A propósito NO reusa LMSTUDIO_BASE_URL:
+    # en esta máquina esa variable en realidad apunta a Ollama (puerto 11434,
+    # el LLM de chat real -- el nombre "lmstudio" quedó de una migración
+    # anterior, ver LMSTUDIO_BASE_URL de más arriba), que no tiene un modelo
+    # de embeddings cargado. El LM Studio real (la app, puerto 1234 por
+    # default) corre aparte y sí lo tiene -- confirmado real en esta PC el
+    # 2026-07-30 (`curl localhost:1234/v1/embeddings` responde, Ollama
+    # devuelve 404 "model not found" para el mismo pedido).
+    embedding_base_url: str = os.getenv("EMBEDDING_BASE_URL", "http://127.0.0.1:1234/v1")
+    embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5")
+
     fs_allowed_root: str = os.getenv("FS_ALLOWED_ROOT", str(Path.home()))
     fs_allow_delete: bool = _bool(os.getenv("FS_ALLOW_DELETE"), False)
 
@@ -52,6 +64,61 @@ class Settings:
     # cantidad de mensajes, no por tokens reales— y siempre cae en el próximo
     # mensaje 'user' para no partir un tool_call de su respuesta.
     max_history_messages: int = int(os.getenv("MAX_HISTORY_MESSAGES", "40"))
+
+    # Tope de tamaño (caracteres del JSON serializado, proxy barato de tokens ya que
+    # no tenemos el tokenizer real del modelo cargado) para el contenido de UN SOLO
+    # mensaje 'tool' antes de mandarlo al modelo (ver app/agent.py::_cap_tool_result).
+    # Bug real encontrado 2026-08-03: security_scan_project sobre un proyecto con
+    # cientos de hallazgos (ej. pygoat, 312 hallazgos) devuelve ~47KB de JSON en un
+    # solo tool result -- sumado al system prompt (~9.7KB) y al schema de las ~50
+    # tools registradas (~40KB), eso ya eran ~98KB (~28k tokens estimados) contra un
+    # n_ctx real de 16384 tokens en Ollama para jarvis-text-v2 (confirmado con
+    # `ollama show jarvis-text-v2`, ver server.log de Ollama: n_ctx = 16384, la
+    # PRIMERA llamada del turno -- solo system+tools+mensaje del usuario, sin ningún
+    # tool result todavía -- ya consumía 12546 tokens, dejando ~3800 de margen real).
+    # Con el prompt así de sobrepasado, el context-shift de llama.cpp/Ollama
+    # descarta el prompt viejo (deja solo n_keep=4 tokens del principio, ver log:
+    # "n_keep = 4") para hacer lugar al tool result gigante -- así se pierde el
+    # system prompt Y el pedido original del usuario, y el modelo, sin ese marco,
+    # respondía con una introducción genérica ("Hola, soy Jarvis...") en vez de
+    # seguir razonando sobre hallazgos que ya no podía "ver". _trim_history ya poda
+    # por CANTIDAD de mensajes, pero no protege contra que UN SOLO mensaje sea
+    # gigante -- este tope aparte cubre ese caso.
+    max_tool_result_chars: int = int(os.getenv("MAX_TOOL_RESULT_CHARS", "6000"))
+
+    # Presupuesto REAL de contexto del modelo, en tokens (ver app/agent.py::
+    # _history_char_budget). Bug real encontrado 2026-08-09: con 51 tools ya
+    # registradas, el system prompt (~9.7KB) + el schema de tools (~42KB) solos ya
+    # representan ~13-16k tokens estimados -- contra un num_ctx de 16384, eso deja
+    # margen CASI NULO para el historial de la conversación, y `_trim_history`
+    # (que poda por CANTIDAD de mensajes) + `_cap_tool_result` (que acota UN SOLO
+    # mensaje) no alcanzan a evitarlo: varios tool results medianos, cada uno bajo
+    # su propio tope individual, igual suman más de lo que queda de contexto.
+    # Un pedido real (security_scan_project sobre pygoat) llegó a 16372/16384
+    # tokens de prompt, tardó varios MINUTOS solo en el prompt-processing (el
+    # throughput se degrada con el contexto en este hardware, GPU de 12GB
+    # compartida con CPU) y nunca llegó a generar respuesta. Subimos num_ctx a
+    # 32768 en el Modelfile de Ollama (había VRAM/RAM de sobra, 24GB+ libres tras
+    # liberar el pedido colgado) para dar aire real, pero el límite de acá es la
+    # protección de fondo -- tiene que quedar sincronizado con el num_ctx real del
+    # modelo cargado (no hay forma de leerlo del backend en runtime sin pegarle a
+    # la API de Ollama aparte, así que es config manual).
+    model_context_tokens: int = int(os.getenv("MODEL_CONTEXT_TOKENS", "32768"))
+
+    # Tokens que se reservan SIN TOCAR para que el modelo pueda generar una
+    # respuesta real después de "leer" todo el prompt -- si el presupuesto de
+    # historial no descuenta esto, un prompt que llena el contexto hasta el
+    # límite exacto no deja lugar para la respuesta (llama.cpp/Ollama hace
+    # context-shift y tira el system prompt, ver nota de MAX_TOOL_RESULT_CHARS).
+    reserved_response_tokens: int = int(os.getenv("RESERVED_RESPONSE_TOKENS", "3000"))
+
+    # No tenemos el tokenizer real del modelo cargado en el backend -- estimar
+    # tokens contando caracteres y dividiendo por esto. 3.2 es conservador
+    # (subestima cuántos caracteres entran por token) a propósito: JSON de tool
+    # results/schemas es denso en símbolos/comillas, más cerca de 3-3.5 chars/token
+    # que las ~4 típicas de prosa en inglés -- mejor quedarse corto en el
+    # presupuesto que volver a exceder el contexto real.
+    chars_per_token_estimate: float = float(os.getenv("CHARS_PER_TOKEN_ESTIMATE", "3.2"))
 
     phone_tool_timeout: float = float(os.getenv("PHONE_TOOL_TIMEOUT", "30"))
 
@@ -135,6 +202,15 @@ class Settings:
     # Obsidian de verdad si el usuario quiere.
     obsidian_vault_path: str = os.getenv(
         "OBSIDIAN_VAULT_PATH", str(Path(__file__).resolve().parent.parent / "obsidian_vault")
+    )
+
+    # Índice de embeddings del vault (ver app/obsidian/embeddings.py) -- un
+    # único JSON {note_id: vector}, nunca dentro del vault (que se abre con
+    # Obsidian de verdad y parte de él se publica en git, ver .gitignore).
+    # Mismo criterio que CODEBASE_INDEX_DIR/SECURITY_SCAN_DIR: cache derivado,
+    # se puede borrar y reconstruir con `vault.reindex_all()`.
+    obsidian_embeddings_path: str = os.getenv(
+        "OBSIDIAN_EMBEDDINGS_PATH", str(Path(__file__).resolve().parent.parent / "data" / "obsidian_embeddings.json")
     )
 
     # Cache en disco del último escaneo de seguridad por proyecto (ver
