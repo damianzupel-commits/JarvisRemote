@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 import config
 from ui.colors import color_for_language, color_for_severity
 from ui.graph_view import GraphView
+from ui.widgets import NoMinWidthLabel
 
 _SYMBOL_ICON = {"function": "🔧", "class": "🏛", "import": "📦"}
 _FINDING_SEVERITY_ICON = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "⚪"}
@@ -362,8 +363,14 @@ class CodebaseView(QWidget):
 
         layout.addLayout(self._build_path_row())
 
-        self.status_label = QLabel("")
+        # NoMinWidthLabel, no QLabel a secas -- acá se muestran errores de
+        # conexión al backend (ej. "HTTPConnectionPool... Max retries
+        # exceeded"), que traen URLs y reprs de excepción larguísimos sin
+        # espacios. Sin este fix, ese texto estira la ventana principal (ver
+        # ui/widgets.py para el bug real, reportado en vivo más de una vez).
+        self.status_label = NoMinWidthLabel("")
         self.status_label.setObjectName("codebaseStatus")
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
         self.language_bar = LanguageBar()

@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QSplitter,
@@ -25,6 +24,7 @@ from PySide6.QtWidgets import (
 import config
 from ui.colors import color_for_author
 from ui.graph_view import GraphView
+from ui.widgets import NoMinWidthLabel
 
 _AUTHOR_LABELS = {"jarvis": "Jarvis", "human": "Humano"}
 _AUTH_HEADER = {"Authorization": f"Bearer {config.API_KEY}"}
@@ -172,8 +172,12 @@ class ObsidianView(QWidget):
 
         layout.addLayout(self._build_toolbar())
 
-        self.status_label = QLabel("")
+        # NoMinWidthLabel, no QLabel a secas -- ver ui/widgets.py: acá se
+        # muestran errores de conexión al backend, con URLs/reprs largos sin
+        # espacios que sin este fix estiran la ventana principal.
+        self.status_label = NoMinWidthLabel("")
         self.status_label.setObjectName("obsidianStatus")
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -213,13 +217,17 @@ class ObsidianView(QWidget):
         panel = QWidget()
         layout = QVBoxLayout(panel)
 
-        self.detail_title = QLabel("")
+        # NoMinWidthLabel en las dos -- título y tags de la nota son texto
+        # dinámico (lo escribe el usuario o Jarvis vía obsidian_save_note) y
+        # pueden traer un token largo sin espacios (ver ui/widgets.py).
+        self.detail_title = NoMinWidthLabel("")
         self.detail_title.setObjectName("obsidianDetailTitle")
         self.detail_title.setWordWrap(True)
         layout.addWidget(self.detail_title)
 
-        self.detail_meta = QLabel("")
+        self.detail_meta = NoMinWidthLabel("")
         self.detail_meta.setObjectName("obsidianDetailMeta")
+        self.detail_meta.setWordWrap(True)
         layout.addWidget(self.detail_meta)
 
         self.detail_content = QTextEdit()

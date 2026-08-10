@@ -10,7 +10,6 @@ from PySide6.QtCore import QObject, Qt, QThread, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 import config
+from ui.widgets import NoMinWidthLabel
 from voice_listener import VoiceListener
 
 
@@ -157,7 +157,11 @@ class ChatView(QWidget):
     # ------------------------------------------------------------- chat
 
     def _add_bubble(self, author: str, text: str, object_name: str | None = None) -> QWidget:
-        label = QLabel(text)
+        # NoMinWidthLabel, no QLabel a secas -- el texto acá es de chat (del
+        # usuario o de Jarvis) y puede traer una URL/path/hash larguísimo sin
+        # espacios, que sin este fix estira la ventana principal (ver
+        # ui/widgets.py para el bug real).
+        label = NoMinWidthLabel(text)
         label.setWordWrap(True)
         label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
@@ -189,7 +193,7 @@ class ChatView(QWidget):
             self._typing_bubble = None
 
     def add_system_message(self, text: str) -> None:
-        label = QLabel(text)
+        label = NoMinWidthLabel(text)
         label.setObjectName("bubbleSystem")
         label.setWordWrap(True)
         label.setAlignment(Qt.AlignCenter)
