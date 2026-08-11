@@ -107,9 +107,17 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 
         return await dispatch_to_phone(name, arguments, timeout=dispatch_timeout)
 
-    result = tool.handler(**arguments)
-    if inspect.isawaitable(result):
-        result = await result
+    if tool.handler.__module__ in _BLOCKING_MODULES:
+        # Ver _BLOCKING_MODULES arriba -- corre en un thread aparte para no
+        # bloquear el event loop del server entero mientras pyautogui/
+        # pywinauto hacen su cosa (incluye sleeps/polls reales de varios
+        # segundos). to_thread, no run_in_executor a mano: mismo resultado,
+        # API más simple (Python 3.9+, este proyecto ya requiere 3.12).
+        result = await asyncio.to_thread(tool.handler, **arguments)
+    else:
+        result = tool.handler(**arguments)
+        if inspect.isawaitable(result):
+            result = await result
     return result
 
 
