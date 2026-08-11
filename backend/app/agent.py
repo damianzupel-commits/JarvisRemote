@@ -3,13 +3,17 @@ pida el modelo, le devuelve los resultados, y repite hasta que responda en texto
 plano o se llegue al tope de iteraciones.
 """
 
+import hashlib
 import json
 import logging
+from datetime import datetime, timezone
 from typing import Any
 
+from . import audit_log
 from .config import settings
 from .llm_client import client
 from .phone_link import is_phone_connected
+from .selfrepair import gate as selfrepair_gate
 from .tools import call_tool, openai_tool_schemas
 from .video_frames import extract_frames_from_video_base64
 
@@ -83,6 +87,31 @@ SYSTEM_PROMPT = (
     "desktop_click_element es por substring: revisá siempre el campo 'process' del resultado para "
     "confirmar que encontró la app correcta antes de asumir éxito solo porque no tiró error. "
     "Cuando el usuario te pida crear un proyecto de código nuevo (no solo auditar uno existente): "
+    "ANTES de tu primer fs_write_file, llamá obsidian_search_notes con el framework/lenguaje/"
+    "tecnología de la tarea (ej. 'Flask', 'Fabric Minecraft modding', lo que corresponda) — puede "
+    "haber guías o errores conocidos ya cargados que te eviten repetir un problema real ya visto "
+    "(nombres de configuración inventados, pasos de setup en el orden equivocado, eventos sin "
+    "conectar, etc.). Hacé la query lo más ESPECÍFICA posible a lo que estás por implementar en ese "
+    "momento (ej. 'AttackEntityCallback Fabric evento golpear enemigo' cuando vas a programar la "
+    "lógica de un golpe, no 'Fabric mod development' a secas) — una query genérica te trae notas "
+    "generales y puede hacer que tu propia nota nueva de research_topic (con un título parecido) "
+    "tape en el ranking una nota más específica y útil que ya estaba guardada; una query puntual "
+    "sobre la clase/API/mecánica exacta evita eso. Esto no es opcional: fs_write_file va a RECHAZAR "
+    "la escritura con un error si todavía no consultaste Obsidian ni una vez en este turno — no lo "
+    "tomes como un bug, es a propósito, y la solución es simplemente llamar obsidian_search_notes y "
+    "reintentar. También va a RECHAZAR la escritura de un archivo NUEVO si dejaste un fs_write_file "
+    "anterior bloqueado sin reintentarlo con éxito todavía — no te distraigas escribiendo otra cosa, "
+    "volvé a intentar ESE archivo (con el contenido corregido si hacía falta) antes de seguir. El "
+    "mismo guardrail de conocimiento se vuelve a activar más adelante en la tarea si un "
+    "pc_run_command de compilar/correr "
+    "el proyecto te devuelve exit_code distinto de 0: antes de reintentar fs_write_file para arreglar "
+    "ESE error puntual, tenés que consultar obsidian_search_notes (o research_topic si Obsidian no "
+    "tiene nada relevante sobre ese error específico) — no inventes una solución alternativa a "
+    "ciegas sin informarte primero sobre la causa real. "
+    "Si diagnosticaste un error real y sabés qué comando lo arregla (ej. generar un archivo que "
+    "falta, instalar una dependencia, correr un wrapper), EJECUTALO vos mismo en el mismo turno con "
+    "la tool que corresponda — no te quedes en anunciar 'voy a intentar X' como texto y cortar ahí: "
+    "eso deja la tarea a medio terminar con el usuario esperando que vos actúes, no describiendo. "
     "escribí los archivos reales con fs_write_file, incluyendo un manifiesto de dependencias "
     "(requirements.txt para Python, package.json para Node, etc. según corresponda) para que el "
     "proyecto sea reproducible sin que el usuario tenga que adivinar qué instalar — y después NO "
@@ -119,6 +148,45 @@ SYSTEM_PROMPT = (
     "de resolver algo no trivial, para dejar registro de la decisión y el porqué (no la uses para "
     "datos triviales o el estado de una tarea puntual, es para criterio que valga la pena recordar "
     "en conversaciones futuras).\n\n"
+    "Cuando el usuario te pida auditar Y REPARAR un hallazgo de seguridad puntual (no solo reportarlo -- "
+    "ej. 'buscá y arreglá la inyección SQL en tal archivo'), tenés autorización para completar el ciclo "
+    "entero SIN pedir confirmación en el medio: security_scan_project (si hace falta) para encontrarlo, "
+    "security_get_finding con file+rule_id+line (NO un finding_id de memoria -- es un hash interno, fácil "
+    "de citar mal) para ver el código real y las notas de Obsidian relacionadas que trae automáticamente, "
+    "y security_audit_find_fix_verify -- NO code_apply_fix -- para aplicar el fix, commitearlo, y "
+    "confirmar que el hallazgo puntual quedó resuelto, todo en un solo paso. No le devuelvas el diff al "
+    "usuario pidiendo que lo confirme él mismo -- eso es exactamente lo que security_audit_find_fix_verify "
+    "evita. Contale el resultado REAL al final (leé 'finding_resolved' de la respuesta, no asumas que el "
+    "fix funcionó solo porque el commit se hizo). code_apply_fix (con su dry-run) sigue siendo la opción "
+    "correcta para ediciones de código que el usuario quiere revisar antes de aplicar, o cuando no pidió "
+    "explícitamente que repares algo vos solo.\n\n"
+    "Si el usuario nombró un hallazgo ESPECÍFICO a reparar (por su regla, CWE, o descripción concreta -- "
+    "ej. 'el B608', 'la inyección SQL de tal archivo'), NO lo sustituyas por otro hallazgo más fácil de "
+    "encontrar sin decirlo -- pasale ese rule_id (y file si lo dijo) como 'requested_rule_id'/'requested_file' "
+    "a CADA llamada de security_audit_find_fix_verify de este pedido: si intentás aplicar el fix sobre un "
+    "hallazgo distinto sin marcarlo, la tool te lo va a rechazar a propósito (bug real 2026-08-09: pasó tres "
+    "veces seguidas, terminó arreglando un hallazgo random en vez del pedido). Si de verdad no podés ubicar el "
+    "hallazgo pedido (no existe, es ambiguo y no lográs desambiguarlo), decíselo al usuario en tu respuesta "
+    "ANTES de aplicar un fix sobre otra cosa -- nunca calladamente. Si al pedir un hallazgo por file+rule_id+"
+    "line el line no matchea, el error te devuelve las líneas reales disponibles para esa regla en ese "
+    "archivo -- usá esas, no seas adivinando líneas al azar en el siguiente intento.\n\n"
+    "'Auditado' y 'verificado' no son lo mismo: que security_scan_project/quality_scan_project no encuentren "
+    "un patrón ya no significa que el proyecto siga funcionando. security_audit_find_fix_verify corre la "
+    "suite de tests real del proyecto automáticamente después de cada fix (leé 'tests' en su respuesta -- "
+    "'detected' dice si había una suite real para correr, 'passed' si quedó en verde); si vos aplicaste el "
+    "fix con code_apply_fix en cambio, llamá code_run_tests después de confirm=true y antes de dar la tarea "
+    "por terminada. Si audit_generate_report muestra que la última corrida de tests falló (o que nunca se "
+    "corrió), decíselo al usuario explícitamente en tu respuesta -- no digas 'quedó todo resuelto' basándote "
+    "solo en que ya no aparecen hallazgos.\n\n"
+    "Si el usuario pide arreglar un bug de tu propio código (backend/, el que está corriendo ahora), usá "
+    "selfrepair_propose_fix -- SOLO propone (dry-run, genera un diff real y un proposal_id), nunca aplica nada. "
+    "fs_write_file sobre tu propio código está bloqueado siempre, sin excepción. Para aplicar la propuesta de "
+    "verdad hace falta que Damian escriba el proposal_id exacto (formato 'sf-xxxxxxxx') en un mensaje suyo -- "
+    "no alcanza con que vos digas que ya confirmó, ni con pedirle un 'dale' genérico: mostrale el diff y "
+    "pedile específicamente que confirme ESE id. Recién con eso en su mensaje podés llamar a code_apply_fix con "
+    "confirm=true, el mismo file y el mismo old_snippet/new_snippet de la propuesta. Después de aplicar, el "
+    "backend sigue corriendo con el código viejo hasta que alguien lo reinicia a mano -- decíselo al usuario, "
+    "no asumas que el fix ya está en efecto.\n\n"
     "Antes de cada mensaje del usuario vas a ver una nota de sistema con el estado ACTUAL "
     "y recién verificado de la conexión del celular. Ese estado puede cambiar de un mensaje "
     "a otro (el usuario puede conectar o desconectar el celular en cualquier momento), así "
@@ -251,18 +319,50 @@ def _cap_tool_result(result: Any, max_chars: int) -> Any:
 
 def _trim_history(history: list[dict], max_messages: int) -> None:
     """Recorta `history` in-place si el cuerpo (todo menos el system prompt en
-    [0]) supera `max_messages`. Corta siempre en el próximo mensaje 'role':'user'
-    para no dejar un tool_call sin su respuesta (o viceversa), lo cual rompe el
-    pedido al modelo. Corte simple por cantidad de mensajes, no por tokens reales
-    -- ver `_trim_history_by_budget` para la poda que sí mira tamaño real."""
+    [0]) supera `max_messages`. Corte simple por cantidad de mensajes, no por
+    tokens reales -- ver `_trim_history_by_budget` para la poda que sí mira
+    tamaño real.
+
+    Bug real 2026-08-10 (test de creación de un mod de Minecraft/Fabric, 19
+    tool calls seguidas en un solo turno): esta función tenía la MISMA falla
+    que `_trim_history_by_budget` tuvo y se corrigió el 2026-08-09 (ver el
+    docstring de esa función) -- pero acá nunca se aplicó el mismo fix. La
+    versión vieja buscaba "el próximo mensaje 'user'" arrancando siempre
+    después de `excess`, sin importar si ese punto ya estaba DENTRO del
+    turno en curso. En un turno de un solo mensaje 'user' seguido de muchas
+    tool calls (sin ninguna segunda pregunta del usuario después), esa
+    búsqueda nunca encuentra un 'user' más adelante y termina podando TODO
+    el cuerpo -- incluido el pedido original -- en cuanto la cantidad de
+    mensajes supera `max_messages`. El modelo se queda sin contexto de qué
+    tenía que hacer y responde con el saludo genérico ("¡Hola! Soy
+    Jarvis...") en vez de seguir la tarea -- reproducido en vivo: se trabó
+    justo así al crear el mod, sin escribir un solo archivo de código.
+
+    Mismo criterio que `_trim_history_by_budget`: el turno en curso -- desde
+    el último mensaje 'user' en adelante -- nunca se poda entero, sin
+    importar cuántos mensajes tenga. Solo se poda lo que quedó ANTES de ese
+    turno (turnos viejos ya resueltos, si los hay)."""
     body = history[1:]
-    excess = len(body) - max_messages
-    if excess <= 0:
+    if len(body) <= max_messages:
         return
-    cut = excess
-    while cut < len(body) and body[cut].get("role") != "user":
+
+    last_user_idx = max((i for i, m in enumerate(body) if m.get("role") == "user"), default=0)
+    current_turn = body[last_user_idx:]
+
+    if len(current_turn) >= max_messages:
+        # Ni siquiera el turno activo solo entra -- no hay nada más que podar
+        # sin romperlo (mismo criterio que `_trim_history_by_budget`): mejor
+        # pasarse del límite que mandar un historial vacío o corrupto.
+        history[1:] = current_turn
+        return
+
+    older = body[:last_user_idx]
+    cut = 0
+    while cut < len(older) and (len(older) - cut) + len(current_turn) > max_messages:
         cut += 1
-    history[1:] = body[cut:]
+        while cut < len(older) and older[cut].get("role") != "user":
+            cut += 1
+    history[1:] = older[cut:] + current_turn
 
 
 def _history_char_budget(tools_schema_chars: int) -> int:
@@ -296,9 +396,26 @@ def _trim_history_by_budget(history: list[dict], budget_chars: int) -> None:
     JSON serializado del cuerpo entre en `budget_chars` -- backstop de TAMAÑO
     real, complementario a `_trim_history` (cantidad de mensajes) y
     `_cap_tool_result` (un solo mensaje). Ver `_history_char_budget` para el
-    bug real que lo motivó. Mismo criterio de corte que `_trim_history`: corta
-    siempre en el próximo mensaje 'role':'user', para no separar un tool_call
-    de su respuesta."""
+    contexto del bug que motivó esta protección.
+
+    El TURNO EN CURSO -- desde el mensaje 'user' más reciente en adelante --
+    nunca se poda entero, sin importar qué tan grande sea. Bug real
+    2026-08-09 (round 2): un turno de auditar+reparar+verificar con muchas
+    tool calls seguidas tiene UN SOLO mensaje 'user' en todo `body` (el
+    pedido original, nada más -- no hay una segunda pregunta del usuario
+    después). La versión anterior de esta función buscaba "el próximo
+    'user' después de un punto de corte" arrancando SIEMPRE después del
+    índice 0 -- en este caso degenerado no hay ningún otro 'user' más
+    adelante, así que la búsqueda nunca encontraba nada y terminaba podando
+    TODO el historial, incluido el pedido original. El modelo se quedó sin
+    ningún contexto de qué tenía que hacer y respondió con un saludo
+    genérico ("¡Hola! Soy Jarvis...") en vez de terminar de aplicar el fix
+    que ya tenía casi resuelto (encontrado corriendo el caso real: B608 en
+    pygoat, 12 tool calls, cortado justo antes de confirmar el commit).
+
+    Solo se poda lo que quedó ANTES del turno en curso (turnos viejos ya
+    resueltos, si los hay) -- mismo criterio de "cortar en el próximo
+    'user'" que antes, pero acotado a esa ventana."""
     body = history[1:]
     if not body:
         return
@@ -309,14 +426,231 @@ def _trim_history_by_budget(history: list[dict], budget_chars: int) -> None:
     if _fits(body):
         return
 
+    last_user_idx = max((i for i, m in enumerate(body) if m.get("role") == "user"), default=0)
+    current_turn = body[last_user_idx:]
+
+    if not _fits(current_turn):
+        # Ni siquiera el turno activo solo entra -- no hay nada más que podar
+        # sin romperlo (partir un tool_call de su respuesta, o peor, perder el
+        # pedido original). Se manda igual, mejor pasarse del presupuesto
+        # estimado que mandar un historial vacío o corrupto -- en la práctica
+        # MAX_TOOL_RESULT_CHARS y MAX_HISTORY_MESSAGES ya deberían evitar
+        # llegar hasta acá.
+        history[1:] = current_turn
+        return
+
+    older = body[:last_user_idx]
     cut = 0
-    while cut < len(body):
+    while cut < len(older) and not _fits(older[cut:] + current_turn):
         cut += 1
-        while cut < len(body) and body[cut].get("role") != "user":
+        while cut < len(older) and older[cut].get("role") != "user":
             cut += 1
-        if _fits(body[cut:]):
-            break
-    history[1:] = body[cut:]
+    history[1:] = older[cut:] + current_turn
+
+
+def _pending_blocked_write_paths(history: list[dict]) -> set[str]:
+    """Devuelve el CONJUNTO de `path` de `fs_write_file` que fueron bloqueados
+    (por `_obsidian_gate_error`, o por cualquier otro motivo -- cualquier
+    resultado con clave "error") y todavía no se reintentaron con éxito,
+    vacío si no hay ninguno pendiente.
+
+    Bug real 2026-08-10 (test v5 del mod de Fabric): el guardrail bloqueó el
+    primer intento de escribir build.gradle, el modelo consultó Obsidian y
+    research_topic como se le pidió -- pero DESPUÉS de eso nunca volvió a
+    intentar escribir build.gradle: se puso a escribir otros archivos
+    (clases Java, fabric.mod.json, assets) y el archivo bloqueado quedó
+    abandonado para siempre. El proyecto terminó sin build.gradle. Esto
+    evita que un archivo bloqueado quede abandonado: mientras haya alguno
+    pendiente, cualquier `fs_write_file` a OTRO path se rechaza también, con
+    un recordatorio explícito de cuáles son los que faltan terminar.
+
+    Bug real 2026-08-10 (v6, encontrado por meta-observación/Opción B): la
+    versión anterior trackeaba un ÚNICO path (`str | None`) -- si un SEGUNDO
+    archivo se bloqueaba mientras el primero seguía pendiente, ese segundo
+    bloqueo se perdía en cuanto el primero se resolvía (`SpadeMod.java`
+    bloqueado mientras `fabric.mod.json` seguía pendiente; al resolverse
+    `fabric.mod.json`, el tracking quedaba en None y `SpadeMod.java` nunca
+    se volvió a reintentar). Ahora es un `set[str]`: cada bloqueo se agrega,
+    cada reintento exitoso se descarta, sin pisar el tracking de los demás.
+
+    Nota interna: el rechazo que este mismo guardrail genera (marcado con
+    `blocked_reason: "pending_retry"` en el resultado) NO cuenta como un
+    nuevo archivo pendiente -- si contara, un intento de escribir un archivo
+    DISTINTO mientras hay uno pendiente pisaría el tracking con el path
+    equivocado (el que se acaba de rechazar, no el original que hace falta
+    reintentar)."""
+    call_id_to_path: dict[str, str] = {}
+    for msg in history:
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if tc.get("function", {}).get("name") != "fs_write_file":
+                continue
+            call_id = tc.get("id")
+            if not call_id:
+                continue
+            try:
+                call_args = json.loads(tc.get("function", {}).get("arguments") or "{}")
+            except json.JSONDecodeError:
+                continue
+            path = call_args.get("path")
+            if path:
+                call_id_to_path[call_id] = path
+
+    pending: set[str] = set()
+    for msg in history:
+        if msg.get("role") != "tool":
+            continue
+        path = call_id_to_path.get(msg.get("tool_call_id"))
+        if not path:
+            continue
+        try:
+            result = json.loads(msg.get("content") or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, dict) and "error" in result:
+            if result.get("blocked_reason") != "pending_retry":
+                pending.add(path)
+        elif path in pending:
+            pending.discard(path)
+    return pending
+
+
+def _audit_safe_args(tool_name: str, args: dict) -> dict:
+    """Versión de `args` segura para persistir en `audit_log` (ver hook en el
+    loop de tool calls, más abajo): para `fs_write_file` reemplaza el `content`
+    real -- puede ser código entero, potencialmente grande -- por un hash
+    sha256 y su longitud, nunca el contenido crudo.
+
+    El hash (no el contenido) es justamente lo que necesita
+    `app/introspection/analyzer.py` para detectar el bug real de v6 (reescribir
+    contenido IDÉNTICO al mismo path varias veces seguidas): comparar hashes es
+    suficiente para eso, y guardar el contenido completo de cada escritura
+    inflaría `audit.log` sin necesidad."""
+    if tool_name == "fs_write_file" and "content" in args:
+        content = args.get("content") or ""
+        safe = {k: v for k, v in args.items() if k != "content"}
+        safe["content_sha256"] = hashlib.sha256(str(content).encode("utf-8", errors="replace")).hexdigest()
+        safe["content_length"] = len(str(content))
+        return safe
+    return args
+
+
+def _audit_safe_result(result: Any) -> Any:
+    """Igual que `_audit_safe_args` pero para el resultado de la tool call --
+    omite blobs base64 (imagen/video) que no aportan nada al análisis de
+    patrones y solo inflarían el log."""
+    if not isinstance(result, dict):
+        return result
+    safe = dict(result)
+    for blob_key in ("image_base64", "video_base64"):
+        if blob_key in safe:
+            safe[blob_key] = f"<omitido, {len(str(safe[blob_key]))} chars>"
+    return safe
+
+
+def _last_index_of_tool_call(history: list[dict], tool_name: str) -> int | None:
+    """Índice (en `history`) del ÚLTIMO mensaje 'assistant' que llamó `tool_name`,
+    o None si nunca se llamó. Usado por `_obsidian_gate_error` para comparar
+    "¿esto pasó antes o después de la última consulta de conocimiento?"."""
+    last: int | None = None
+    for i, msg in enumerate(history):
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            if tc.get("function", {}).get("name") == tool_name:
+                last = i
+    return last
+
+
+def _last_failed_command_result(history: list[dict]) -> tuple[int, dict] | None:
+    """Busca el ÚLTIMO mensaje 'tool' que sea la respuesta de un `pc_run_command`
+    con `exit_code` distinto de 0 (una compilación/build/test real que falló).
+    Devuelve `(índice en history, dict del resultado parseado)`, o None si no
+    hay ninguno. El mensaje 'tool' en sí no lleva el nombre de la tool que lo
+    generó -- hay que mapear `tool_call_id` -> nombre buscando en los mensajes
+    'assistant' anteriores."""
+    call_id_to_name: dict[str, str] = {}
+    for msg in history:
+        if msg.get("role") != "assistant":
+            continue
+        for tc in msg.get("tool_calls") or []:
+            call_id = tc.get("id")
+            name = tc.get("function", {}).get("name")
+            if call_id and name:
+                call_id_to_name[call_id] = name
+
+    last: tuple[int, dict] | None = None
+    for i, msg in enumerate(history):
+        if msg.get("role") != "tool":
+            continue
+        if call_id_to_name.get(msg.get("tool_call_id")) != "pc_run_command":
+            continue
+        try:
+            result = json.loads(msg.get("content") or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(result, dict) and result.get("exit_code") not in (None, 0):
+            last = (i, result)
+    return last
+
+
+def _obsidian_gate_error(history: list[dict]) -> str | None:
+    """Devuelve un mensaje de error si el próximo `fs_write_file` debería
+    bloquearse por falta de conocimiento consultado, o None si puede pasar.
+
+    Dos casos reales, ambos encontrados corriendo tareas de creación de código
+    de verdad (mods de Fabric para Minecraft, v2/v3/v4):
+
+    1. Nunca se consultó Obsidian en este turno (bug real 2026-08-10, v2/v3):
+       pedirlo solo en el prompt no alcanzó, el modelo lo ignoró dos corridas
+       seguidas -- acá se bloquea hasta que llame obsidian_search_notes al
+       menos una vez.
+
+    2. Ya se consultó Obsidian, pero DESPUÉS de esa consulta hubo un intento
+       real de compilar/correr el proyecto (`pc_run_command`) que falló
+       (`exit_code != 0`), y todavía no se volvió a consultar conocimiento
+       sobre ESE error puntual antes de reintentar escribir código (bug real
+       2026-08-10, v4: consultó Obsidian una vez al principio sobre StatusEffect,
+       nunca chequeó nada sobre cómo detectar un golpe -- AttackEntityCallback --,
+       y terminó inventando una mecánica equivocada en vez de darse cuenta de
+       que le faltaba información puntual). Esto es agnóstico de lenguaje o
+       framework: aplica igual a un fallo de `npm run build`, `pytest`,
+       `cargo build`, etc. -- cualquier `pc_run_command` que falle cuenta.
+
+    En ambos casos, tanto `obsidian_search_notes` como `research_topic` cuentan
+    como "consulté conocimiento" -- `research_topic` es la vía de escape
+    cuando Obsidian no tiene nada relevante todavía."""
+    search_idx = _last_index_of_tool_call(history, "obsidian_search_notes")
+    research_idx = _last_index_of_tool_call(history, "research_topic")
+    last_knowledge_idx = max((i for i in (search_idx, research_idx) if i is not None), default=None)
+
+    if last_knowledge_idx is None:
+        return (
+            "Antes de escribir código nuevo tenés que consultar tu conocimiento "
+            "en Obsidian primero -- llamá obsidian_search_notes con el tema/"
+            "tecnología de esta tarea (ej. el framework o lenguaje que vas a usar). "
+            "Puede haber guías o errores conocidos ya documentados que evitan "
+            "problemas reales (nombres de configuración inventados, eventos sin "
+            "conectar, etc.). Después de consultar Obsidian, reintentá fs_write_file."
+        )
+
+    failed = _last_failed_command_result(history)
+    if failed is not None:
+        fail_idx, result = failed
+        if fail_idx > last_knowledge_idx:
+            error_detail = str(result.get("stderr") or result.get("stdout") or "")[:400]
+            return (
+                f"El último intento de compilar/correr el proyecto falló (exit_code="
+                f"{result.get('exit_code')}) y todavía no consultaste tu conocimiento "
+                f"sobre ESE error puntual antes de seguir escribiendo código. Error real: "
+                f"{error_detail!r}. Llamá obsidian_search_notes (o research_topic si "
+                f"Obsidian no tiene nada relevante) sobre la causa concreta de este error "
+                f"antes de reintentar fs_write_file -- no sigas adivinando otra solución "
+                f"a ciegas sin informarte primero."
+            )
+
+    return None
 
 
 async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str, list[dict]]:
@@ -338,7 +672,15 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
     # que cambie de modelo (ver docstring de `_VISION_FALLBACK_MSG`).
     awaiting_vision_response = False
 
-    for _ in range(settings.max_agent_iterations):
+    # Tope de iteraciones dinámico: arranca en el default (settings.max_agent_iterations,
+    # pensado para chat/auditorías normales) y sube una sola vez a
+    # settings.max_agent_iterations_code_task en cuanto este turno usa fs_write_file
+    # por primera vez -- ahí es cuando se confirma que es una tarea de creación de
+    # código, no antes (ver docstring de max_agent_iterations_code_task).
+    effective_max_iterations = settings.max_agent_iterations
+    iteration = 0
+    while iteration < effective_max_iterations:
+        iteration += 1
         # Poda también acá adentro (no solo al entrar): un turno con muchas
         # tool calls puede hacer crecer `history` varias veces dentro del
         # mismo `run_agent`, antes de volver a pasar por la poda de arriba.
@@ -355,6 +697,23 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                 messages=history + [_phone_status_note()],
                 tools=tools or None,
                 tool_choice="auto" if tools else None,
+                # Bug real 2026-08-10: no había NINGÚN tope de tokens de salida --
+                # `_history_char_budget` ya restaba `reserved_response_tokens` del
+                # presupuesto de PROMPT asumiendo que la respuesta iba a quedar
+                # acotada a eso, pero nunca se lo pasamos a la llamada real: el
+                # trim protege lo que ENTRA, nada protegía lo que el modelo podía
+                # generar DESPUÉS. En una corrida real (reparación masiva en
+                # pygoat) la respuesta final entró en lo que parece haber sido un
+                # loop de repetición justo después de que Ollama disparó su propio
+                # context-shift (`n_discard=16381` -- el prompt-processing había
+                # llenado el contexto casi hasta el límite antes de esta llamada),
+                # y sin tope de salida siguió generando sin parar (pasó 2800+
+                # tokens, contra ~100-450 de una respuesta normal, y seguía
+                # subiendo cuando se cortó a mano) -- potencialmente hasta agotar
+                # TODO el contexto restante. Con este tope, `finish_reason` pasa a
+                # "length" en el peor caso -- una respuesta truncada pero ACOTADA,
+                # nunca una que se coma el resto del turno.
+                max_tokens=settings.reserved_response_tokens,
             )
         except Exception as exc:
             if awaiting_vision_response:
@@ -383,12 +742,83 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                 except json.JSONDecodeError:
                     args = {}
                 logger.info("tool_call name=%s args=%s", tc.function.name, args)
-                try:
-                    result = await call_tool(tc.function.name, args)
-                except Exception as exc:  # las tools pueden fallar por muchas razones distintas
-                    logger.warning("tool_call failed name=%s error=%s", tc.function.name, exc)
-                    result = {"error": str(exc)}
+                gate_error = None
+                blocked_reason = None
+                # Guardrail duro (2026-08-11, Opción C del diseño de auto-reparación):
+                # cualquier escritura -- fs_write_file o code_apply_fix(confirm=true) --
+                # que apunte adentro del propio backend/ de Jarvis se bloquea sin
+                # excepción salvo que el mensaje de ESTE turno traiga un proposal_id
+                # confirmado (ver app/selfrepair/gate.py para las reglas completas).
+                # Va ANTES de los gates de fs_write_file de abajo -- es más específico
+                # y más severo, no reemplaza al resto (un self-fix igual necesita haber
+                # consultado Obsidian, etc.).
+                gate_error = selfrepair_gate.self_target_gate_error(tc.function.name, args, message)
+                if gate_error is None and tc.function.name == "fs_write_file":
+                    pending_path = _pending_blocked_write_path(history)
+                    write_path = args.get("path")
+                    if pending_path is not None and pending_path != write_path:
+                        # Guardrail duro (2026-08-10, extendido después de v5): ver el
+                        # docstring de `_pending_blocked_write_path` -- no alcanza con
+                        # desbloquear el guardrail de conocimiento, hay que asegurarse
+                        # de que el archivo bloqueado se retome, no se abandone.
+                        gate_error = (
+                            f"Todavía tenés pendiente reintentar '{pending_path}', que se había "
+                            f"bloqueado antes y nunca se volvió a escribir con éxito -- terminá ESE "
+                            f"archivo primero (con el contenido corregido si hacía falta) antes de "
+                            f"escribir '{write_path}' u otro archivo nuevo. No lo dejes abandonado."
+                        )
+                        blocked_reason = "pending_retry"
+                    else:
+                        gate_error = _obsidian_gate_error(history)
+                if gate_error:
+                    # Guardrail duro (2026-08-10, extendido después de v4): ver el
+                    # docstring de `_obsidian_gate_error` para los dos casos reales
+                    # que motivaron esto -- pedirlo solo en el prompt no alcanzó.
+                    result = {"error": gate_error}
+                    if blocked_reason:
+                        # Ver docstring de `_pending_blocked_write_path`: este marcador
+                        # evita que el propio rechazo se registre como un nuevo archivo
+                        # pendiente (pisaría el tracking del que hace falta reintentar).
+                        result["blocked_reason"] = blocked_reason
+                    logger.info("fs_write_file bloqueado: %s", gate_error[:80])
+                else:
+                    if (
+                        tc.function.name == "fs_write_file"
+                        and effective_max_iterations < settings.max_agent_iterations_code_task
+                    ):
+                        effective_max_iterations = settings.max_agent_iterations_code_task
+                    try:
+                        result = await call_tool(tc.function.name, args)
+                    except Exception as exc:  # las tools pueden fallar por muchas razones distintas
+                        logger.warning("tool_call failed name=%s error=%s", tc.function.name, exc)
+                        result = {"error": str(exc)}
+                    else:
+                        # Si esto era un self-fix (code_apply_fix confirm=true sobre
+                        # backend/) que acaba de pasar el gate de arriba, marca la
+                        # propuesta usada como aplicada -- así el mismo proposal_id
+                        # no se puede reusar para otro cambio después.
+                        selfrepair_gate.consume_proposal_if_applied(
+                            tc.function.name, args, message, result, datetime.now(timezone.utc).isoformat()
+                        )
                 tool_log.append({"tool": tc.function.name, "arguments": args, "result": result})
+
+                # Traza estructurada de CADA tool call del agente (bloqueada o
+                # no) para `app/introspection/analyzer.py` -- a diferencia del
+                # `logger.info` de más arriba (texto libre, no necesariamente
+                # persiste salvo que alguien redirija stdout a un archivo a
+                # mano, ver docstring de `audit_log.py`), esto siempre queda en
+                # `audit.log` como JSON parseable. Es la fuente de datos real
+                # para detectar patrones de falla como los de v6 (loop de
+                # reescritura idéntica, archivo bloqueado nunca reintentado).
+                _tool_error = result.get("error") if isinstance(result, dict) and "error" in result else None
+                audit_log.log_tool_call(
+                    target="agent",
+                    tool=tc.function.name,
+                    arguments=_audit_safe_args(tc.function.name, args),
+                    result=None if _tool_error else _audit_safe_result(result),
+                    error=_tool_error,
+                    conversation_id=conv_id,
+                )
 
                 if tc.function.name in _IMAGE_TOOL_NAMES and "image_base64" in result:
                     # El mensaje 'tool' no lleva el base64 crudo: mandarle un blob de
