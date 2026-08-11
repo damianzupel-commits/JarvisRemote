@@ -754,18 +754,18 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                 # consultado Obsidian, etc.).
                 gate_error = selfrepair_gate.self_target_gate_error(tc.function.name, args, message)
                 if gate_error is None and tc.function.name == "fs_write_file":
-                    pending_path = _pending_blocked_write_path(history)
+                    pending_paths = _pending_blocked_write_paths(history)
                     write_path = args.get("path")
-                    if pending_path is not None and pending_path != write_path:
-                        # Guardrail duro (2026-08-10, extendido después de v5): ver el
-                        # docstring de `_pending_blocked_write_path` -- no alcanza con
+                    if pending_paths and write_path not in pending_paths:
+                        # Guardrail duro (2026-08-10, extendido después de v5 y v6): ver el
+                        # docstring de `_pending_blocked_write_paths` -- no alcanza con
                         # desbloquear el guardrail de conocimiento, hay que asegurarse
-                        # de que el archivo bloqueado se retome, no se abandone.
+                        # de que TODOS los archivos bloqueados se retomen, no se abandonen.
                         gate_error = (
-                            f"Todavía tenés pendiente reintentar '{pending_path}', que se había "
-                            f"bloqueado antes y nunca se volvió a escribir con éxito -- terminá ESE "
-                            f"archivo primero (con el contenido corregido si hacía falta) antes de "
-                            f"escribir '{write_path}' u otro archivo nuevo. No lo dejes abandonado."
+                            f"Todavía tenés pendiente(s) reintentar: {', '.join(sorted(pending_paths))} -- que "
+                            f"se habían bloqueado antes y nunca se volvieron a escribir con éxito -- terminá "
+                            f"ESOS archivos primero (con el contenido corregido si hacía falta) antes de "
+                            f"escribir '{write_path}' u otro archivo nuevo. No los dejes abandonados."
                         )
                         blocked_reason = "pending_retry"
                     else:
