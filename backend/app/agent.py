@@ -473,12 +473,18 @@ def _pending_blocked_write_paths(history: list[dict]) -> set[str]:
     se volvió a reintentar). Ahora es un `set[str]`: cada bloqueo se agrega,
     cada reintento exitoso se descarta, sin pisar el tracking de los demás.
 
-    Nota interna: el rechazo que este mismo guardrail genera (marcado con
-    `blocked_reason: "pending_retry"` en el resultado) NO cuenta como un
-    nuevo archivo pendiente -- si contara, un intento de escribir un archivo
-    DISTINTO mientras hay uno pendiente pisaría el tracking con el path
-    equivocado (el que se acaba de rechazar, no el original que hace falta
-    reintentar)."""
+    Nota interna (corregido 2026-08-11, tras encontrar empíricamente que la
+    primera versión de este fix seguía teniendo el bug real): ANTES, el
+    rechazo que este mismo guardrail genera para un archivo DISTINTO
+    mientras hay uno pendiente (marcado `blocked_reason: "pending_retry"`)
+    se excluía a propósito de contar como "nuevo pendiente" -- tenía sentido
+    cuando `pending` era un único valor (agregarlo pisaría el tracking del
+    original). Con un `set[str]` esa exclusión ya NO hace falta y de hecho
+    reproduce el bug de v6 de nuevo: el archivo distinto rechazado nunca
+    queda registrado, así que se pierde apenas se resuelve el original --
+    exactamente el mismo síntoma que esto debía arreglar. Confirmado con un
+    test real reproduciendo la secuencia exacta de v6 antes y después de
+    este cambio."""
     call_id_to_path: dict[str, str] = {}
     for msg in history:
         if msg.get("role") != "assistant":
@@ -509,8 +515,7 @@ def _pending_blocked_write_paths(history: list[dict]) -> set[str]:
         except json.JSONDecodeError:
             continue
         if isinstance(result, dict) and "error" in result:
-            if result.get("blocked_reason") != "pending_retry":
-                pending.add(path)
+            pending.add(path)
         elif path in pending:
             pending.discard(path)
     return pending
@@ -776,7 +781,7 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                     # que motivaron esto -- pedirlo solo en el prompt no alcanzó.
                     result = {"error": gate_error}
                     if blocked_reason:
-                        # Ver docstring de `_pending_blocked_write_path`: este marcador
+                        # Ver docstring de `_pending_blocked_write_paths`: este marcador
                         # evita que el propio rechazo se registre como un nuevo archivo
                         # pendiente (pisaría el tracking del que hace falta reintentar).
                         result["blocked_reason"] = blocked_reason
