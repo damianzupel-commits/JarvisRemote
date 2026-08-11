@@ -23,6 +23,15 @@ class Settings:
     lmstudio_base_url: str = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
     lmstudio_model: str = os.getenv("LMSTUDIO_MODEL", "local-model")
 
+    # Bug real 2026-08-10 (v6, sesión de creación del mod de Fabric): el cliente
+    # OpenAI (app/llm_client.py) no tenía timeout explícito -- el SDK usaba su
+    # default (600s), que una generación real lenta (cold start del modelo +
+    # ~2800 tokens a ~4.4 tok/s) superó, disparando un reintento automático que
+    # obligó a reprocesar el prompt completo (~21.6K tokens) desde cero.
+    # Generoso a propósito: mejor esperar de más que cortar una generación real
+    # en curso y forzar un reprocesamiento carísimo.
+    llm_request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "1800"))
+
     # Server + modelo de embeddings para memoria semántica del vault (ver
     # app/obsidian/embeddings.py). A propósito NO reusa LMSTUDIO_BASE_URL:
     # en esta máquina esa variable en realidad apunta a Ollama (puerto 11434,
@@ -55,6 +64,15 @@ class Settings:
     pc_shell_enabled: bool = _bool(os.getenv("PC_SHELL_ENABLED"), True)
 
     max_agent_iterations: int = int(os.getenv("MAX_AGENT_ITERATIONS", "10"))
+
+    # Tope de iteraciones extendido, SOLO para tareas que resultan ser creación de
+    # código multi-archivo -- ver app/agent.py::run_agent, se activa recién cuando
+    # el turno actual ya usó fs_write_file al menos una vez (no es un default
+    # general: una auditoría o un chat normal nunca llega a necesitarlo). Bug real
+    # 2026-08-10: crear un mod de Fabric desde cero (build.gradle, fabric.mod.json,
+    # varias clases Java, tags, lang, modelos) agotó las 30 iteraciones por defecto
+    # antes de terminar de armar el wrapper de Gradle o intentar compilar.
+    max_agent_iterations_code_task: int = int(os.getenv("MAX_AGENT_ITERATIONS_CODE_TASK", "50"))
 
     # Tope de mensajes que se guardan por conversación en memoria (ver
     # app/agent.py::_trim_history). Sin esto, `_conversations` crece para
@@ -226,6 +244,27 @@ class Settings:
     # hallazgo en el mismo cache.
     quality_scan_dir: str = os.getenv(
         "QUALITY_SCAN_DIR", str(Path(__file__).resolve().parent.parent / "data" / "quality_scans")
+    )
+
+    # Cache en disco de la ÚLTIMA corrida de tests reales por proyecto (ver
+    # app/testing/store.py) -- mismo criterio que SECURITY_SCAN_DIR. Es lo que
+    # lee `audit_report.generate_report` para marcar explícitamente si hubo (o
+    # no) una corrida de tests real en verde después de los fixes aplicados,
+    # en vez de asumir "compiló" == "funciona" (gap real 2026-08-10, ver
+    # sesión de meta-observación: el pipeline nunca tenía un paso de
+    # verificación funcional entre corregir y re-auditar).
+    test_run_dir: str = os.getenv(
+        "TEST_RUN_DIR", str(Path(__file__).resolve().parent.parent / "data" / "test_runs")
+    )
+
+    # Store de propuestas de auto-reparación (ver app/selfrepair/, agregado
+    # 2026-08-11 -- Opción C del diseño de auto-reparación: Jarvis puede
+    # PROPONER (dry-run, sin gate) un fix a su propio código, pero aplicarlo
+    # de verdad (confirm=true) requiere un proposal_id concreto que Damian
+    # confirme a mano -- ver el guardrail de self-target en agent.py). Cada
+    # propuesta queda acá hasta que se aplica o se descarta.
+    selfrepair_dir: str = os.getenv(
+        "SELFREPAIR_DIR", str(Path(__file__).resolve().parent.parent / "data" / "selfrepair")
     )
 
     # nmap_scan (ver app/tools/network_scan.py + app/network/) -- reconocimiento
