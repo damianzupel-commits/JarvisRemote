@@ -12,11 +12,25 @@ o "phone" (se despacha al celular conectado por WebSocket, ver `phone_link.py`).
 diferencia, solo ve una lista plana de tools.
 """
 
+import asyncio
 import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Literal
 
 Target = Literal["pc", "phone"]
+
+# Bug real (informe de arquitectura 2026-08-10): app/tools/desktop.py corre
+# funciones SINCRÓNICAS (pyautogui/pywinauto, con sleeps/polls reales -- ej.
+# `_wait_for_new_window` espera hasta 5s en un loop bloqueante) directo en el
+# thread del event loop de FastAPI -- durante esos segundos, TODO el server
+# queda sin atender: ni /api/health, ni los frames del WebSocket del celular,
+# ni ninguna otra tool call. Mismo problema que ya se resolvió para el
+# cliente LLM con un cliente async (ver app/llm_client.py), acá con
+# asyncio.to_thread en vez de reescribir pyautogui/pywinauto como async.
+# Clasificado por MÓDULO (no tool por tool) a propósito: cualquier tool que
+# se agregue a app/tools/desktop.py en el futuro queda cubierta
+# automáticamente, sin depender de acordarse de marcarla una por una.
+_BLOCKING_MODULES = ("app.tools.desktop",)
 
 
 @dataclass
@@ -111,8 +125,11 @@ from . import obsidian  # noqa: E402,F401
 from . import security_scan  # noqa: E402,F401
 from . import quality_scan  # noqa: E402,F401
 from . import code_edit  # noqa: E402,F401
+from . import test_run  # noqa: E402,F401
+from . import selfrepair  # noqa: E402,F401
 from . import audit_report  # noqa: E402,F401
 from . import network_scan  # noqa: E402,F401
+from . import research  # noqa: E402,F401
 
 # generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
 # propósito, no importadas -- no es un problema de estilo, es una precaución
