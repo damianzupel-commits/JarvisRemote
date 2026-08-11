@@ -30,4 +30,9 @@ def configure_logging() -> None:
     )
     file_handler.setFormatter(formatter)
 
-    logging.basicConfig(level=logging.INFO, handlers=[stream_handler, file_handler])
+    # force=True: basicConfig es un no-op silencioso si el root logger YA tiene
+    # handlers -- confirmado real en la propia suite de tests (pytest configura los
+    # suyos antes), y en teoria podria pasar en produccion tambien si algo mas toca
+    # el root logger antes de este llamado. Sin force=True, este fix completo queda
+    # silenciosamente inerte en cualquiera de esos casos.
+    logging.basicConfig(level=logging.INFO, handlers=[stream_handler, file_handler], force=True)
