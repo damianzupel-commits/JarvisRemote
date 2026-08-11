@@ -799,6 +799,11 @@ async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str
                 # consultado Obsidian, etc.).
                 gate_error = selfrepair_gate.self_target_gate_error(tc.function.name, args, message)
                 if gate_error is None and tc.function.name == "fs_write_file":
+                    # Guardrail duro (2026-08-11): loop de reescritura idéntica EN VIVO,
+                    # ver docstring de `_live_identical_rewrite_loop_error` -- antes solo
+                    # se detectaba post-hoc (Opción B), cuando ya no servía para frenar nada.
+                    gate_error = _live_identical_rewrite_loop_error(conv_id, args.get("path"), args.get("content") or "")
+                if gate_error is None and tc.function.name == "fs_write_file":
                     pending_paths = _pending_blocked_write_paths(history)
                     write_path = args.get("path")
                     if pending_paths and write_path not in pending_paths:
