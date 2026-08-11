@@ -554,6 +554,46 @@ def _audit_safe_result(result: Any) -> Any:
     return safe
 
 
+# Mismo umbral que app/introspection/analyzer.py::_DEFAULT_MIN_REPEATS -- 3
+# reescrituras idénticas seguidas cuentan como loop. Repetido acá (no
+# importado) a propósito: introspection/analyzer.py opera sobre entradas ya
+# cerradas de una sesión terminada, este guardrail corre EN VIVO adentro del
+# loop del agente -- son dos consumidores del mismo criterio, no el mismo
+# código ejecutándose en dos momentos distintos.
+_LIVE_LOOP_MIN_REPEATS = 3
+
+
+def _live_identical_rewrite_loop_error(conv_id: str, path: str | None, content: str) -> str | None:
+    """Guardrail duro EN VIVO (2026-08-11, prerequisito #7 para Opción A --
+    ver informe de arquitectura 2026-08-10). Bug real de v6: el modelo
+    reescribió el mismo archivo con contenido idéntico 14 veces seguidas sin
+    ningún freno -- Opción B (meta-observación) detecta este patrón, pero
+    solo DESPUÉS de que la sesión termina, cuando ya no sirve para nada.
+    Esto corre el MISMO criterio (ver `_LIVE_LOOP_MIN_REPEATS`) antes de
+    permitir la escritura, leyendo del audit_log real (target="agent", ya
+    persistido por el hook de Opción B) en vez de reimplementar el tracking
+    desde cero -- misma fuente de verdad que usa el análisis post-hoc."""
+    if not path:
+        return None
+    content_hash = hashlib.sha256(str(content).encode("utf-8", errors="replace")).hexdigest()
+    entries = audit_log.read_entries(target="agent", tool="fs_write_file", conversation_id=conv_id)
+    recent = entries[-(_LIVE_LOOP_MIN_REPEATS - 1):]
+    if len(recent) < _LIVE_LOOP_MIN_REPEATS - 1:
+        return None
+    for e in recent:
+        if not e.get("ok"):
+            return None
+        prior_args = e.get("arguments") or {}
+        if prior_args.get("path") != path or prior_args.get("content_sha256") != content_hash:
+            return None
+    return (
+        f"Ya escribiste '{path}' con este MISMO contenido exacto {_LIVE_LOOP_MIN_REPEATS - 1} vez/veces "
+        f"seguidas -- esto es un loop de reescritura idéntica (bug real de v6, ver "
+        f"app/introspection/analyzer.py). Si ya terminaste con este archivo, seguí con el resto de la "
+        f"tarea; si necesitás cambiar algo, escribí contenido REALMENTE distinto."
+    )
+
+
 def _last_index_of_tool_call(history: list[dict], tool_name: str) -> int | None:
     """Índice (en `history`) del ÚLTIMO mensaje 'assistant' que llamó `tool_name`,
     o None si nunca se llamó. Usado por `_obsidian_gate_error` para comparar
