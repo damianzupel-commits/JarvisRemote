@@ -1,11 +1,13 @@
 import json
 import logging
+import time
 
 from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 
 from .agent import run_agent
 from .auth import verify_api_key
 from .config import settings
+from .llm_client import client
 from .logging_config import configure_logging
 from .models import ChatRequest, ChatResponse, ToolCallLog
 from .network_info import network_candidates
@@ -33,6 +35,52 @@ async def health() -> dict:
         # respaldo cuando no están en la misma red.
         "network_candidates": network_candidates(settings.port),
     }
+
+
+# Timeout corto a propósito, distinto del timeout general del cliente
+# (settings.llm_request_timeout_seconds, 1800s) -- un chequeo de salud tiene
+# que responder rápido; si el LLM está genuinamente colgado, mejor reportar
+# "no responde" en 30s que esperar hasta media hora.
+_HEALTH_DEEP_TIMEOUT_SECONDS = 30.0
+
+
+@app.get("/api/health/deep")
+async def health_deep() -> dict:
+    """A diferencia de /api/health (que solo confirma que el proceso HTTP
+    responde), esto ejercita el loop del LLM de verdad -- un round-trip real
+    y mínimo (sin tools, pocos tokens de salida) para confirmar que el modelo
+    responde, no solo que el puerto está abierto.
+
+    Prerequisito #3 de la Opción A (identificado en el informe de
+    arquitectura 2026-08-10): un futuro watchdog que reinicia el backend
+    después de un self-edit necesita poder distinguir "el proceso está up"
+    de "el agente realmente funciona" -- un proceso con el loop del agente
+    roto pasaría /api/health igual (no hace ninguna llamada real al modelo),
+    así que ese endpoint solo no alcanza para verificar un self-restart."""
+    start = time.monotonic()
+    try:
+        response = await client.chat.completions.create(
+            model=settings.lmstudio_model,
+            messages=[{"role": "user", "content": "Respondé solo con la palabra: ok"}],
+            max_tokens=10,
+            timeout=_HEALTH_DEEP_TIMEOUT_SECONDS,
+        )
+        elapsed = time.monotonic() - start
+        content = (response.choices[0].message.content or "").strip()
+        return {
+            "status": "ok",
+            "llm_reachable": True,
+            "elapsed_seconds": round(elapsed, 2),
+            "response_preview": content[:50],
+        }
+    except Exception as exc:
+        elapsed = time.monotonic() - start
+        return {
+            "status": "error",
+            "llm_reachable": False,
+            "elapsed_seconds": round(elapsed, 2),
+            "error": str(exc),
+        }
 
 
 @app.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
