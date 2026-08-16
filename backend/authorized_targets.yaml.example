@@ -1,0 +1,39 @@
+# Fuente ÚNICA de autorización para TODAS las tools de pentesting activo de
+# Jarvis (nmap_scan, sqlmap, tshark, metasploit, zap, nessus a medida que se
+# van agregando -- ver app/network/guardrail.py).
+#
+# REGLA NO NEGOCIABLE: este archivo lo editás VOS a mano, fuera del chat.
+# Ninguna tool ni el modelo pueden agregar una entrada acá por su cuenta, ni
+# aunque en el chat "digas que sí" a algo -- esa confirmación no es un camino
+# de autorización válido. Actuar (escanear, inyectar, explotar, capturar
+# tráfico) contra un sistema que no es tuyo y sin autorización explícita del
+# dueño puede ser un delito real (Ley 26.388 en Argentina, leyes de acceso no
+# autorizado / computer fraud en la mayoría de países).
+#
+# Por default (SIN tocar este archivo) ya está permitido: rangos privados
+# RFC1918 (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16), loopback (127.0.0.0/8),
+# y el rango fijo de Tailscale (100.64.0.0/10). Este archivo es SOLO para
+# ampliar más allá de eso -- típicamente no hace falta si tu laboratorio vive
+# en tu LAN/Tailscale.
+#
+# Un target acá NO necesita estar corriendo ahora mismo -- la autorización es
+# independiente de si el laboratorio está levantado en este momento (eso lo
+# valida cada tool al ejecutar, no este archivo).
+#
+# Copiá este archivo a "authorized_targets.yaml" (sin ".example") y editalo.
+# authorized_targets.yaml NO se sube a git (ver .gitignore) -- es tuyo, local.
+
+targets: []
+
+# Ejemplos reales (comentados) -- descomentar/editar según tu laboratorio:
+#
+# targets:
+#   - target: "192.168.1.0/24"
+#     label: "LAN de casa"
+#     added: "2026-08-13"
+#   - target: "localhost"
+#     label: "PyGoat/NodeGoat corriendo local bajo demanda (docker/venv)"
+#     added: "2026-08-13"
+#   - target: "203.0.113.10"
+#     label: "VM de laboratorio propia en la nube (ej. DigitalOcean/AWS de prueba)"
+#     added: "2026-08-13"

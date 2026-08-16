@@ -65,6 +65,26 @@ def test_nmap_scan_runs_and_returns_dict_for_private_target(monkeypatch):
     assert result["findings"] == []
 
 
+def test_nmap_scan_uses_the_pinned_ip_not_the_original_hostname(monkeypatch):
+    """Regresión end-to-end del bug real de DNS rebinding arreglado
+    2026-08-13: nmap_scan tiene que pasarle a run_nmap_scan la IP YA
+    resuelta por el gate, nunca el hostname original (que run_nmap_scan/
+    nmap resolvería de nuevo por su cuenta, en un momento distinto)."""
+    monkeypatch.setattr(settings, "nmap_enabled", True)
+    monkeypatch.setattr(guardrail.socket, "gethostbyname", lambda name: "192.168.1.77")
+    captured = {}
+
+    def fake_run_nmap_scan(target, scan_type, timeout):
+        captured["target"] = target
+        return _fake_result(target)
+
+    monkeypatch.setattr(network_scan, "run_nmap_scan", fake_run_nmap_scan)
+
+    network_scan.nmap_scan("mi-router.local")
+
+    assert captured["target"] == "192.168.1.77"  # la IP pinneada, NUNCA "mi-router.local"
+
+
 def test_nmap_scan_audits_rejected_attempt(monkeypatch):
     monkeypatch.setattr(settings, "nmap_enabled", True)
 

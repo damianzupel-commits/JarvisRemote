@@ -9,6 +9,12 @@ venv/
 .env
 *.local
 
+# Autorización de pentesting activo -- local a cada instalación, nunca en git
+# (ver backend/authorized_targets.yaml.example para el template)
+backend/authorized_targets.yaml
+backend/sqlmap_api_credentials.json
+backend/zap_api_key.json
+
 # Playwright
 backend/last_screenshot.png
 test-results/

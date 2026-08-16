@@ -135,7 +135,12 @@ def nmap_scan(target: str, scan_type: str = "quick", timeout: float = _DEFAULT_T
         raise NmapDisabled(error)
 
     try:
-        resolve_and_authorize(target)
+        # Usar la IP YA RESUELTA por el gate para el escaneo real (no el
+        # `target` original si era un hostname) -- bug real de DNS
+        # rebinding arreglado 2026-08-13, ver docstring de
+        # resolve_and_authorize. Nunca volver a pasarle el hostname crudo
+        # a run_nmap_scan, que lo resolvería de nuevo por su cuenta.
+        authorized_target = resolve_and_authorize(target)
     except TargetNotAuthorizedError as exc:
         # El campo "error" (y por lo tanto ok=False) en esta línea de auditoría
         # ES el registro de "rechazado por el guardrail" -- mismo mecanismo que
@@ -144,7 +149,7 @@ def nmap_scan(target: str, scan_type: str = "quick", timeout: float = _DEFAULT_T
         raise
 
     try:
-        result = run_nmap_scan(target, scan_type=scan_type, timeout=timeout)
+        result = run_nmap_scan(authorized_target, scan_type=scan_type, timeout=timeout)
     except Exception as exc:
         audit_log.log_tool_call(target="pc", tool="nmap_scan", arguments=arguments, error=str(exc))
         raise
@@ -229,13 +234,24 @@ async def phone_nmap_scan(target: str, scan_type: str = "quick", timeout: float 
         raise PhoneNmapDisabled(error)
 
     try:
-        resolve_and_authorize(target)
+        # Mismo fix real de DNS rebinding que nmap_scan (ver docstring de
+        # resolve_and_authorize) -- usa la IP ya resuelta por el gate, no
+        # el hostname original. Nota de trade-off real: la resolución acá
+        # la hace la PC (donde vive el guardrail), no el celular -- para
+        # un hostname que solo resuelve DENTRO de la red del celular (ej.
+        # un nombre mDNS/.local de esa wifi puntual), esto podría no ser
+        # el mismo resultado que resolvería el celular. Se prioriza cerrar
+        # el hueco de seguridad real (confirmado explotable) sobre ese
+        # caso borde de hostnames locales al celular, que sigue siendo
+        # infrecuente frente al uso real (targets por IP directa dentro
+        # del rango privado, sin resolución de por medio en absoluto).
+        authorized_target = resolve_and_authorize(target)
     except TargetNotAuthorizedError as exc:
         audit_log.log_tool_call(target="phone", tool="phone_nmap_scan", arguments=arguments, error=str(exc))
         raise
 
     try:
-        command_str = build_termux_nmap_command(target, scan_type=scan_type)
+        command_str = build_termux_nmap_command(authorized_target, scan_type=scan_type)
     except InvalidScanTypeError as exc:
         audit_log.log_tool_call(target="phone", tool="phone_nmap_scan", arguments=arguments, error=str(exc))
         raise

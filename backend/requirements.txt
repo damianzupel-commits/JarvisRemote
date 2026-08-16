@@ -79,3 +79,17 @@ python-docx>=1.2
 # datos que el Markdown, sin necesitar un conversor markdown->PDF aparte.
 matplotlib>=3.9
 fpdf2>=2.7
+# Parseo de authorized_targets.yaml (ver app/network/guardrail.py) -- la
+# fuente única de autorización para TODAS las tools de pentesting activo
+# (nmap_scan y las que se agregan desde 2026-08-13). Ya estaba instalada
+# como dependencia transitiva de otra cosa, pero es carga real para un gate
+# de seguridad no negociable, así que queda pinneada explícita (mismo
+# criterio que cryptography más arriba).
+pyyaml>=6.0
+# Captura/análisis de tráfico de red ("Wireshark" en la spec de pentesting,
+# ver app/pentest/packet_capture.py) -- pura Python, sin binario externo
+# (a diferencia de shellear a tshark.exe). El análisis de un .pcap ya
+# existente no necesita nada más que esto; la captura EN VIVO sigue
+# necesitando Npcap instalado a mano (mismo click de UAC que nmap, es una
+# limitación de Windows, no de esta librería).
+scapy>=2.7

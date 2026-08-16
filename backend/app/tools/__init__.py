@@ -32,6 +32,24 @@ Target = Literal["pc", "phone"]
 # automáticamente, sin depender de acordarse de marcarla una por una.
 _BLOCKING_MODULES = ("app.tools.desktop",)
 
+# Bug real encontrado 2026-08-13 implementando sqlmap_scan, mismo problema
+# de fondo que el de desktop.py de arriba: `nmap_scan` (app/tools/
+# network_scan.py) es una función SINCRÓNICA que corre `subprocess.run`
+# con timeout de hasta 1200s -- bloquea el event loop entero durante todo
+# el escaneo, exactamente el mismo bug ya arreglado para desktop.py, pero
+# nunca se agregó a _BLOCKING_MODULES cuando se creó. `sqlmap_scan`
+# (app/tools/pentest_sqlmap.py) tiene el mismo problema (polling HTTP
+# bloqueante contra la REST API de SQLMap).
+#
+# Por NOMBRE de tool, no por módulo (a diferencia de _BLOCKING_MODULES) --
+# `network_scan.py` mezcla `nmap_scan` (síncrona, bloqueante) con
+# `phone_nmap_scan` (`async def`, ya no-bloqueante porque awaitea
+# `dispatch_to_phone`): meter el MÓDULO entero acá rompería
+# `phone_nmap_scan` -- `asyncio.to_thread` sobre una función async
+# devuelve la corrutina sin ejecutarla, nunca corre de verdad.
+_BLOCKING_TOOL_NAMES = frozenset({"nmap_scan", "sqlmap_scan", "packet_capture_scan", "packet_capture_analyze", "zap_scan"})
+
+
 
 @dataclass
 class Tool:
@@ -107,12 +125,13 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 
         return await dispatch_to_phone(name, arguments, timeout=dispatch_timeout)
 
-    if tool.handler.__module__ in _BLOCKING_MODULES:
-        # Ver _BLOCKING_MODULES arriba -- corre en un thread aparte para no
-        # bloquear el event loop del server entero mientras pyautogui/
-        # pywinauto hacen su cosa (incluye sleeps/polls reales de varios
-        # segundos). to_thread, no run_in_executor a mano: mismo resultado,
-        # API más simple (Python 3.9+, este proyecto ya requiere 3.12).
+    if tool.handler.__module__ in _BLOCKING_MODULES or name in _BLOCKING_TOOL_NAMES:
+        # Ver _BLOCKING_MODULES/_BLOCKING_TOOL_NAMES arriba -- corre en un
+        # thread aparte para no bloquear el event loop del server entero
+        # mientras pyautogui/pywinauto/subprocess.run/polling HTTP hacen su
+        # cosa (incluye sleeps/polls reales de varios segundos o minutos).
+        # to_thread, no run_in_executor a mano: mismo resultado, API más
+        # simple (Python 3.9+, este proyecto ya requiere 3.12).
         result = await asyncio.to_thread(tool.handler, **arguments)
     else:
         result = tool.handler(**arguments)
@@ -138,6 +157,10 @@ from . import selfrepair  # noqa: E402,F401
 from . import audit_report  # noqa: E402,F401
 from . import network_scan  # noqa: E402,F401
 from . import research  # noqa: E402,F401
+from . import investigation  # noqa: E402,F401
+from . import pentest_sqlmap  # noqa: E402,F401
+from . import pentest_wireshark  # noqa: E402,F401
+from . import pentest_zap  # noqa: E402,F401
 
 # generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
 # propósito, no importadas -- no es un problema de estilo, es una precaución

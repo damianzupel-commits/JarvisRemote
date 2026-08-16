@@ -162,9 +162,30 @@ pytest
   (`obsidian_vault/jarvis/`, `obsidian_vault/human/`, gitignored). Evolución
   más rica de `jarvis_reflect` (que queda intacto, para notas de una sola
   línea).
+- `app/obsidian/embeddings.py` — memoria **semántica**, no solo keyword
+  match: `search_notes` usa similitud coseno sobre embeddings como método
+  principal (dos notas con el mismo significado pero palabras distintas se
+  relacionan, ej. "contraseña en texto plano" ↔ "claves sin cifrar"), con
+  overlap de palabras como fallback/complemento -- si el server de
+  embeddings está caído, o una nota puntual nunca se indexó, esa nota sigue
+  apareciendo por keyword, nunca desaparece de los resultados. Corre 100%
+  local: pega contra un server OpenAI-compatible (`EMBEDDING_BASE_URL`,
+  default `http://127.0.0.1:1234/v1` -- **no** el mismo host que
+  `LMSTUDIO_BASE_URL` usa para chat, ver `app/config.py`) pidiendo el modelo
+  de embeddings cargado ahí (`EMBEDDING_MODEL`, default
+  `text-embedding-nomic-embed-text-v1.5`). Nada sale a una nube; si ese
+  server no responde, `search_notes` degrada solo a keyword overlap (el
+  comportamiento de siempre). Los vectores se guardan en un único JSON
+  (`OBSIDIAN_EMBEDDINGS_PATH`, default `backend/data/obsidian_embeddings.json`,
+  gitignored) -- para las ~50 notas de este vault no se justifica una base
+  vectorial (Chroma/Pinecone), un archivo local con coseno vía numpy alcanza.
+  `save_note`/`delete_note` mantienen el índice al día solos; `vault.reindex_all()`
+  recalcula todo desde cero (backfill de notas viejas, o recuperación de un
+  índice corrupto/vacío).
 - `app/tools/obsidian.py` — `obsidian_save_note` (siempre autor "jarvis" --
   la tool no expone el parámetro `author`, así el modelo no puede escribir
-  notas humanas), `obsidian_search_notes`, `obsidian_list_notes`.
+  notas humanas), `obsidian_search_notes` (semántica + keyword, ver arriba),
+  `obsidian_list_notes`.
 - `app/routers/obsidian.py` — CRUD de notas humanas para la pestaña
   "Obsidian" de la ventana de PC (`tray-app/ui/obsidian_view.py`); el POST
   está fijado a autor "human", es el único punto de escritura de la UI.
@@ -358,9 +379,16 @@ las tool calls automáticamente contra el registry.
   (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), loopback
   (`127.0.0.0/8`) y el rango fijo de Tailscale (`100.64.0.0/10`). Cualquier
   IP/dominio público se rechaza antes de ejecutar nmap, salvo que esté en
-  `NMAP_AUTHORIZED_TARGETS` (`backend/.env`) — una whitelist vacía por
-  default que **solo el usuario llena a mano**; ni la tool ni el LLM pueden
-  agregarse un target nuevo por ningún argumento de la tool call. Gateada
+  `backend/authorized_targets.yaml` (copiar de `authorized_targets.yaml.example`)
+  o, retrocompatible, en `NMAP_AUTHORIZED_TARGETS` (`backend/.env`) — vacío
+  por default, **solo el usuario lo llena a mano**; ni la tool ni el LLM
+  pueden agregarse un target nuevo por ningún argumento de la tool call, y
+  "el usuario dijo que sí en el chat" nunca es un camino de autorización
+  válido. Desde 2026-08-13 `authorized_targets.yaml` es la fuente ÚNICA
+  compartida por todas las tools de pentesting activo del proyecto (nmap,
+  sqlmap, tshark, metasploit, zap, nessus a medida que se agregan) — un
+  target ahí no necesita estar corriendo/alcanzable en este momento para
+  estar autorizado (los laboratorios se levantan bajo demanda). Gateada
   además por `NMAP_ENABLED=true` (default; el guardrail de scope ya la hace
   segura por diseño aun con la tool prendida) y auditada vía
   `app/audit_log.py` (target/scan_type/aceptado-o-rechazado en cada intento).
@@ -396,6 +424,154 @@ las tool calls automáticamente contra el registry.
   necesita root — soporta TCP connect scan y NSE, no SYN scan/detección de
   SO, misma limitación que la PC sin Npcap). Si falta, la tool falla con un
   mensaje explícito en vez de asumir que corrió.
+- **`sqlmap_scan` (agregada 2026-08-13) es la primera tool de PENTESTING
+  ACTIVO del proyecto** (ver `app/pentest/`, `app/tools/pentest_sqlmap.py`) —
+  a diferencia de `nmap_scan` (reconocimiento pasivo, nunca envía payloads),
+  esta SÍ envía payloads de inyección SQL reales contra el target. Comparte
+  el mismo guardrail de scope no negociable de `nmap_scan`
+  (`app/network/guardrail.py::resolve_and_authorize`), validado sobre el
+  HOST extraído de la URL antes de tocar nada. Wrapper vía la REST API real
+  de SQLMap (`sqlmapapi.py`, HTTP Basic Auth con credenciales generadas una
+  vez y persistidas en `sqlmap_api_credentials.json`, gitignored) en vez de
+  parsear el stdout de texto libre del CLI — mismo motivo que `nmap -oX -`:
+  salida estructurada real, no texto para adivinar. Server SOLO en
+  `127.0.0.1`, arrancado on-demand por Jarvis si no está corriendo ya.
+  Preset cerrado de `scan_type` (`detect`/`enumerate`), nunca flags libres
+  de SQLMap ni un preset de volcado de datos reales — el propósito es
+  demostrar/documentar una vulnerabilidad para un reporte, no exfiltrar
+  información. **Instalación de sqlmap: manual, pero SIN UAC/admin** (a
+  diferencia de nmap/Npcap) — es pura Python: `git clone --depth 1
+  https://github.com/sqlmapproject/sqlmap.git` y apuntar `SQLMAP_PATH` al
+  `sqlmap.py` resultante (default: `~/sqlmap-dev/sqlmap.py`). Descubrimiento
+  real de correr esto en Windows: el CLI de sqlmap necesita `--non-interactive`
+  además de `--batch` para no colgarse en un prompt de protección contra
+  doble-click (dos guardas de interactividad distintas) — la REST API
+  (`sqlmapapi.py -s`) no lo dispara, así que el wrapper no necesita pasarlo.
+  Validado en vivo contra un target local deliberadamente vulnerable:
+  detección positiva real de 4 técnicas (boolean-based blind, error-based,
+  time-based blind, UNION query) con DBMS identificado correctamente.
+- **`packet_capture_scan`/`packet_capture_analyze` (agregadas 2026-08-13,
+  "Wireshark" en la spec) implementadas con `scapy` (pip puro), NO
+  shelleando a `tshark.exe`** — decisión de diseño tomada durante la
+  implementación (no estaba en la propuesta original): analizar un `.pcap`
+  ya existente no necesita NADA además de `pip install scapy` (validado en
+  vivo: escribir/leer un `.pcap` real funciona sin Npcap instalado), así
+  que `packet_capture_analyze` no tiene ninguna dependencia de instalación
+  manual. `packet_capture_scan` (captura EN VIVO) sí sigue necesitando
+  Npcap — limitación real de Windows, no de la librería (mismo click de
+  UAC que nmap: https://npcap.com/#download). Guardrail ADAPTADO del resto
+  del módulo: acá no hay un solo target remoto, hay una interfaz de red
+  LOCAL que puede exponer tráfico de otros dispositivos — `host_filter` es
+  obligatorio y nunca puede estar vacío, cada host pasa por el mismo
+  `authorized_targets.yaml` compartido, armando un filtro BPF real; nunca
+  se ofrece captura sin acotar de "todo lo que pasa por la interfaz".
+  Verificado en dos capas independientes (defense-in-depth real, mismo
+  bug ya evitado en `pentest_sqlmap.py`): tanto la tool como
+  `packet_capture.capture_packets` validan el guardrail por separado, no
+  solo una de las dos. `packet_capture_analyze` (sobre un `.pcap` ya
+  existente) no tiene gate de target — analizar un archivo que ya tenés no
+  es una acción contra un sistema real.
+- **`zap_scan` (agregada 2026-08-13, checkpoint 5) usa OWASP ZAP en vez de
+  Burp Suite Pro** (decisión de Damian: Burp Pro necesita licencia paga que
+  no tiene, ZAP es gratis y tiene REST API completa). Mismo guardrail
+  compartido de `resolve_and_authorize`, validado sobre el HOST de la URL,
+  y mismo fix de pinneo a la IP resuelta para cerrar la ventana de DNS
+  rebinding (ver `pentest_sqlmap.py`) — con una limitación real y
+  documentada: a diferencia de sqlmap, no preserva un header `Host:`
+  override (existiría vía el addon Replacer de ZAP, complejidad real no
+  justificada para el caso de uso actual), así que targets de hosting
+  virtual por nombre no están soportados todavía. **Instalación: manual,
+  SIN UAC/admin** — ZAP se distribuye como zip "Crossplatform" (necesita
+  Java 11+, ya presente en esta máquina): descargar desde
+  https://github.com/zaproxy/zaproxy/releases/latest y apuntar `ZAP_PATH`
+  al `zap-X.Y.Z.jar` resultante (default: `~/zap-2.17.0/zap-2.17.0.jar`).
+  Descubrimiento real de correr esto en Windows: el PRIMER arranque de un
+  ZAP recién descomprimido descarga e instala addons bundleados (~34s
+  reales medidos); arranques siguientes, con addons ya cacheados, tardan
+  ~1s real — confirmado con dos arranques consecutivos, no un supuesto.
+  `scan_type='spider'` (default) solo crawlea + scan pasivo, nunca envía
+  un payload de ataque; `'full'` además corre el scan activo real. Validado
+  en vivo contra un target local deliberadamente vulnerable (XSS reflejado
+  real): detección positiva real de "Cross Site Scripting (Reflected)"
+  (risk=High, evidence=el payload real reflejado), más varios hallazgos
+  reales de Medium/Low (headers de seguridad faltantes, versión de
+  servidor filtrada) — 12 alertas reales en total, ninguna inventada;
+  cubierto además por un test de integración real y automatizado (se
+  salta si ZAP no está instalado).
+- **Protección contra malware (`app/malware/`, agregada 2026-08-16, spec de Damian ampliada de "auditar código"
+  a "proteger la PC real")** — detección real (YARA + ClamAV + heurística conductual, los tres desde el
+  arranque, no en fases) sobre el resto de la PC, MÁS auto-protección de la propia instalación de Jarvis.
+  Cada hallazgo real queda con el mismo rigor forense que el módulo de investigación: mismo `artifact_store`
+  content-addressed por SHA-256 y mismo log firmado Ed25519 (`app/investigation/keys.py`/`log.py`), pero en
+  su propio archivo/dominio — no entra al flujo de "casos" de investigación.
+  - **YARA**: wheel con libyara embebida (`yara-python`), sin instalación aparte ni UAC. Set de reglas propio
+    en `app/malware/rules/starter.yar` (EICAR, dropper de PowerShell, nota de ransomware, webshell PHP, robo
+    de credenciales de navegador, persistencia por Registro) — sumar reglas de terceros (ej.
+    github.com/Yara-Rules/rules) es tirar archivos `.yar`/`.yara` sueltos en esa misma carpeta, sin tocar
+    código. **Validado en vivo real**: EICAR, patrón de dropper y patrón de nota de ransomware confirmados
+    con matches reales (ver `tests/test_malware_yara_scanner.py`).
+  - **ClamAV**: motor de firmas masivo vía el daemon `clamd` — **instalación manual, con UAC**:
+    1. Instalador oficial: https://www.clamav.net/downloads (Windows installer).
+    2. Durante la instalación, dejar que configure el servicio de Windows escuchando por TCP (`clamd.conf`:
+       `TCPSocket 3310`, `TCPAddr 127.0.0.1`, y comentar la línea `Example` que bloquea el arranque por
+       default si el instalador la deja sin comentar).
+    3. Correr `freshclam.exe` (o el servicio "ClamAV FreshClam") al menos una vez para bajar la base de
+       firmas real (varios cientos de MB la primera vez).
+    4. Iniciar/reiniciar el servicio "ClamAV" en `services.msc`.
+    5. Nada más de configurar del lado de Jarvis — `CLAMAV_ENABLED=true`, `CLAMD_HOST`/`CLAMD_PORT` en
+       `backend/.env.example` ya apuntan a `127.0.0.1:3310`, el default del instalador.
+    **No se pudo validar en vivo** (ClamAV no está instalado en la PC de desarrollo) — sin `clamd` corriendo,
+    `malware_scan_path`/el escaneo on-access/diario siguen funcionando con YARA + heurística conductual
+    solamente, ClamAV se salta con un aviso explícito (`ClamAVUnavailableError`), nunca se confunde con
+    "escaneó y no encontró nada".
+  - **Heurística conductual + escaneo on-access** (`watchdog` sobre Descargas/Escritorio/Temp): cada archivo
+    nuevo se escanea al instante, y un patrón de muchos archivos modificados/renombrados en poco tiempo con
+    entropía alta (típico de ransomware cifrando) dispara una alerta fuerte al log firmado — sin identificar
+    ni poder matar el proceso responsable (limitación real, requeriría correlación a nivel de kernel).
+    **Validado en vivo real de punta a punta**: un archivo dejado en una carpeta vigilada fue detectado por
+    YARA, movido a cuarentena, y el evento verificado en el log firmado, todo automático.
+  - **Escaneo completo diario** de `FS_ALLOWED_ROOT` (la carpeta de usuario — NO litealmente `C:\`, que sería
+    enormemente más lento y en su mayoría archivos de sistema que Windows Defender ya cubre), corrido por un
+    loop en background del propio backend (`app/malware/fullscan.py`), sin Task Scheduler de Windows.
+  - **Cuarentena reversible por default** (mueve, nunca borra) — borrado definitivo requiere `confirm=true`
+    explícito (`malware_quarantine_delete`), mismo patrón dry-run→confirm que `code_apply_fix`.
+  - **VirusTotal**: confirmación SELECTIVA de hashes ya sospechosos localmente (nunca proactiva sobre todo el
+    disco — la cuota gratis, 4 consultas/min, no lo bancaría con el escaneo diario ya prendido), y solo manda
+    el hash SHA-256, nunca el contenido del archivo. Sacar una API key gratis: crear cuenta en
+    https://www.virustotal.com/gui/join-us → perfil → "API Key" → pegarla en `VIRUSTOTAL_API_KEY` en
+    `backend/.env`.
+  - **Auto-protección parte A (FIM)**: hashea y vigila `authorized_targets.yaml`, la clave de firma Ed25519,
+    `.env`, y el código de `app/` entero contra un baseline — **validado en vivo real** (modificación,
+    borrado, y archivo nuevo bajo una carpeta vigilada, los tres detectados correctamente).
+  - **Auto-protección parte B**: `psutil` sobre el propio proceso — hijos inesperados (fuera de una
+    allowlist de binarios que el proyecto conoce que lanza) y conexiones salientes a puertos inusuales.
+    Limitación real, dicha explícita: no verifica firma de binarios (un proceso que se hace pasar por un
+    nombre de la allowlist no se detecta), y no distingue C2 real sobre HTTPS 443 de tráfico legítimo.
+  - **Auto-protección parte C, EXPERIMENTAL (Damian la pidió a pesar de la advertencia explícita de que no
+    es alcanzable con la misma calidad que A/B con recursos de un solo dev)**: detección tipo EDR real
+    (acceso a memoria del propio proceso, hilos remotos inyectados) leyendo el Event Log de Sysmon —
+    **sin escribir un driver de kernel propio**, apoyada en el driver YA FIRMADO por Microsoft que instala
+    Sysmon. **Instalación manual**:
+    1. Descargar Sysmon: https://learn.microsoft.com/sysinternals/downloads/sysmon.
+    2. (Recomendado, para no ahogarse en ruido) usar una config curada conocida, ej.
+       https://github.com/SwiftOnSecurity/sysmon-config (`sysmonconfig-export.xml`).
+    3. Instalar con UAC: `sysmon64.exe -accepteula -i sysmonconfig-export.xml`.
+    4. Confirmar en el Visor de eventos (Registros de aplicaciones y servicios → Microsoft → Windows →
+       Sysmon → Operational) que hay eventos.
+    5. `SYSMON_ENABLED=true` en `backend/.env`, reiniciar el backend.
+    **No se pudo validar en vivo** (Sysmon no está instalado en la PC de desarrollo) — el código está escrito
+    contra el esquema de eventos real y documentado de Sysmon (Event ID 10 ProcessAccess, Event ID 8
+    CreateRemoteThread) y ambos caminos de error (capa apagada, canal inexistente) se confirmaron gracefully
+    contra el Event Log real de esta máquina, pero la PRIMERA corrida con Sysmon de verdad instalado es la
+    que confirma si detecta como está escrito. `ProcessAccess` es conocido por ser ruidoso incluso en SOCs
+    profesionales — si la señal resulta poco útil en la práctica, la recomendación pasa a desactivarla
+    (`SYSMON_ENABLED=false`) y quedarse con A+B, que sí son sólidas.
+  - **Hallazgo real durante el desarrollo, no un bug de Jarvis**: al probar con el string EICAR real y con un
+    patrón de dropper de PowerShell, Windows Defender interceptó esos archivos de prueba EN TIEMPO REAL antes
+    de que el propio motor de Jarvis pudiera releerlos (`OSError: [Errno 22] Invalid argument` al reintentar
+    abrirlos) — Defender le ganó la carrera de lectura. No es una falla: confirma que las dos capas de
+    defensa conviven sin pisarse (Jarvis sigue aportando valor real en lo que Defender no reconoce, como las
+    reglas YARA propias o contenido por debajo de su umbral heurístico).
 - **La conexión celular↔PC viaja en texto plano (`ws://`, no `wss://`) — TLS
   está preparado pero apagado (`TLS_ENABLED=false` default).** Ver
   `backend/certs/README.md`: hay un certificado self-signed listo para generar
