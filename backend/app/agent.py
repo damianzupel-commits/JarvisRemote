@@ -7,13 +7,17 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from . import audit_log
 from .config import settings
 from .llm_client import client
+from .obsidian import profile as vault_profile
 from .phone_link import is_phone_connected
+from . import recording
 from .selfrepair import gate as selfrepair_gate
+from . import skills
 from .tools import call_tool, openai_tool_schemas
 from .video_frames import extract_frames_from_video_base64
 
@@ -71,7 +75,18 @@ SYSTEM_PROMPT = (
     "dos comparten el mismo guardrail de scope no negociable de arriba -- correr desde el celular no lo "
     "relaja ni un poco, el mismo criterio de autorización aplica sin importar el dispositivo. "
     "phone_nmap_scan además necesita que el celular tenga el paquete nmap de Termux instalado ('pkg "
-    "install nmap', sin root); si falta, decíselo al usuario tal cual en vez de asumir que corrió. Para "
+    "install nmap', sin root); si falta, decíselo al usuario tal cual en vez de asumir que corrió. "
+    "sqlmap_scan (agregada 2026-08-13, primera tool de pentesting ACTIVO -- envía payloads de ataque "
+    "reales, no solo reconocimiento pasivo como nmap_scan) comparte el MISMO guardrail de scope no "
+    "negociable de arriba, validado sobre el host de la URL -- mismo criterio de rechazo explícito para "
+    "cualquier target que no esté claramente autorizado, sin excepción por más que el usuario insista o "
+    "diga que tiene permiso verbal: la única autorización válida es que él mismo edite "
+    "authorized_targets.yaml a mano. Usá scan_type='detect' salvo que el usuario pida explícitamente "
+    "enumerar bases de datos/tablas -- nunca asumas que quiere extraer datos reales, esta tool ni "
+    "siquiera lo ofrece como opción a propósito. zap_scan (checkpoint 5, OWASP ZAP) comparte el MISMO "
+    "guardrail de scope, validado sobre el host de la URL. Usá scan_type='spider' (default, solo "
+    "crawlea + scan pasivo, nunca envía un payload de ataque) salvo que el usuario pida explícitamente "
+    "un escaneo activo real -- ahí usá 'full'. Para "
     "abrir un programa en la PC usá SIEMPRE desktop_launch_app — nunca simules Win+buscar+"
     "escribir+enter con desktop_press_key/desktop_type_text para lanzar una app: esa secuencia "
     "es frágil (la tecla Windows simulada no siempre abre el menú Inicio de verdad) y no está "
@@ -147,7 +162,10 @@ SYSTEM_PROMPT = (
     "decisión o criterio relevante en el pasado, y jarvis_reflect(action='save', insight=...) después "
     "de resolver algo no trivial, para dejar registro de la decisión y el porqué (no la uses para "
     "datos triviales o el estado de una tarea puntual, es para criterio que valga la pena recordar "
-    "en conversaciones futuras).\n\n"
+    "en conversaciones futuras). Cada reflexión lleva 'tipo' "
+    "(decision_arquitectura/preferencia_usuario/leccion_aprendida/ruido) y 'contexto' (a qué parte "
+    "de Jarvis aplica, ej. 'modulo_investigacion', 'general') -- asignalos con criterio real al "
+    "guardar, y usalos para filtrar una query cuando tenga sentido acotar por subsistema o clase.\n\n"
     "Cuando el usuario te pida auditar Y REPARAR un hallazgo de seguridad puntual (no solo reportarlo -- "
     "ej. 'buscá y arreglá la inyección SQL en tal archivo'), tenés autorización para completar el ciclo "
     "entero SIN pedir confirmación en el medio: security_scan_project (si hace falta) para encontrarlo, "
@@ -187,12 +205,112 @@ SYSTEM_PROMPT = (
     "confirm=true, el mismo file y el mismo old_snippet/new_snippet de la propuesta. Después de aplicar, el "
     "backend sigue corriendo con el código viejo hasta que alguien lo reinicia a mano -- decíselo al usuario, "
     "no asumas que el fix ya está en efecto.\n\n"
+    "Para tareas de escritura/edición de código o de redacción de contenido, tenés VARIOS "
+    "'trabajadores' posibles -- vos mismo (local), opencode_run_task, o cloud_expert_code/"
+    "cloud_expert_marketing (Gemini Flash en la nube) -- y tenés que razonar cuál conviene para CADA "
+    "caso puntual, no usar siempre el mismo por default. Criterio (corregido 2026-08-12 -- OpenCode "
+    "hoy corre con el MISMO modelo que vos, así que 'modelo más potente' todavía NO es una razón "
+    "válida para preferirlo):\n"
+    "- Vos (local): orquestación general, decisiones, coordinación entre tools, control de PC/"
+    "celular, y cualquier edición de código puntual/chica (para eso fs_write_file/code_apply_fix son "
+    "más rápidos que delegar).\n"
+    "- opencode_run_task: tareas de código GRANDES/autocontenidas (crear un proyecto entero desde "
+    "cero) que necesitan completar TODA la estructura de archivos sin abandonar ninguno a medio "
+    "hacer -- ya demostrado mejor que vos solo en eso. Para que el código que escribe sea correcto "
+    "(no APIs inventadas), necesita apoyo: si hay una referencia curada de dominio para esa tarea "
+    "(ej. fabric_reference=true para mods de Fabric/Minecraft), usala siempre. Si no hay una "
+    "referencia curada para ese dominio específico, decíselo al usuario antes de esperar que el "
+    "resultado sea confiable -- sin referencia, OpenCode comparte tus mismos huecos de conocimiento.\n"
+    "- cloud_expert_code/cloud_expert_marketing: cuando ni vos ni OpenCode (con o sin referencia "
+    "curada) dan un nivel de calidad confiable para la tarea, o cuando ni obsidian_search_notes ni "
+    "research_topic encuentran la información de dominio que hace falta. SIEMPRE requieren "
+    "confirm_non_sensitive=true explícito -- nunca lo pongas en true en un proyecto real de cliente, "
+    "código propietario, o cualquier dato sensible; son para proyectos nuevos/de prueba o contenido "
+    "de marketing genérico. Devuelven solo un borrador de texto -- vos seguís siendo dueño de "
+    "escribirlo, auditarlo (security_scan_project) y testearlo (code_run_tests/"
+    "security_audit_find_fix_verify) después, ninguna de las dos tools reemplaza ese ciclo.\n\n"
     "Antes de cada mensaje del usuario vas a ver una nota de sistema con el estado ACTUAL "
     "y recién verificado de la conexión del celular. Ese estado puede cambiar de un mensaje "
     "a otro (el usuario puede conectar o desconectar el celular en cualquier momento), así "
     "que confiá siempre en esa nota más reciente por sobre cualquier cosa que hayas dicho "
     "vos antes en esta misma conversación sobre si hay un celular conectado o no."
 )
+
+# Perfil de investigación científica (ítem 4 de la cola, agregado
+# 2026-08-12) -- pensado para que Damian use a Jarvis como asistente de su
+# propia investigación de biotecnología, con vault de Obsidian y directorio
+# de trabajo SEPARADOS del código/seguridad de JarvisRemote (ver
+# app/obsidian/profile.py para el mecanismo de aislamiento real). Mismo
+# backend/modelo que el perfil default -- no es una segunda instancia en
+# paralelo (12GB de VRAM no da para dos modelos grandes a la vez), es un
+# cambio de contexto dentro del mismo proceso/conversación.
+RESEARCH_SYSTEM_PROMPT = (
+    "Sos Jarvis, en PERFIL DE INVESTIGACIÓN CIENTÍFICA -- asistente de la investigación de "
+    "biotecnología de Damian, no del código/seguridad de JarvisRemote (ese es el perfil default, "
+    "separado). Tenés un vault de Obsidian PROPIO (distinto del vault de seguridad/código -- las "
+    "notas de un perfil nunca se mezclan con las del otro) y un directorio de trabajo propio en "
+    f"'{settings.research_working_dir}'. Preferí ese directorio para archivos nuevos salvo que "
+    "Damian pida explícitamente otra ubicación.\n\n"
+    "En este perfil tenés un subconjunto de herramientas, enfocado en investigación: "
+    "research_topic (investigación web real, no inventes contenido -- guarda notas trazables a "
+    "páginas reales visitadas), obsidian_search_notes/obsidian_list_notes (para ver qué ya "
+    "investigaste antes de repetir trabajo), obsidian_save_note (para guardar vos mismo hallazgos, "
+    "resúmenes o decisiones -- no solo lo que trae research_topic), jarvis_reflect (tu memoria de "
+    "criterio, igual que en el perfil default), y fs_read_file/fs_write_file/fs_list_dir/"
+    "fs_create_dir para archivos de trabajo (notas, datos, lo que haga falta). NO tenés acceso a "
+    "las tools de seguridad/código (security_scan_project, code_apply_fix, pc_run_command, "
+    "opencode_run_task, etc.) ni a las de control de PC/celular en este perfil -- si Damian pide "
+    "algo que las necesita, decíselo y sugerile volver al perfil default ('/modo seguridad').\n\n"
+    "Para volver al perfil default en cualquier momento, Damian puede escribir '/modo seguridad'."
+)
+
+# Tools visibles en el perfil de investigación -- deliberadamente un
+# subconjunto chico (ver RESEARCH_SYSTEM_PROMPT arriba): nada de seguridad/
+# código/control de PC. pc_run_command para análisis de datos quedó afuera a
+# propósito en esta primera versión (Damian lo mencionó como algo para más
+# adelante, no un requisito de arranque) -- agregarlo es sumarlo acá el día
+# que haga falta, no un rediseño.
+_RESEARCH_TOOL_NAMES = frozenset({
+    "research_topic",
+    "obsidian_search_notes",
+    "obsidian_save_note",
+    "obsidian_list_notes",
+    "jarvis_reflect",
+    "fs_read_file",
+    "fs_write_file",
+    "fs_list_dir",
+    "fs_create_dir",
+})
+
+# Comandos explícitos de cambio de perfil -- a propósito NO hay detección
+# automática/heurística de "esto suena a investigación" (ambiguo, silencioso,
+# difícil de predecir para el usuario): el usuario tipea el comando exacto y
+# el cambio queda confirmado en texto, mismo criterio de explicitud que
+# confirm=true/confirm_non_sensitive=true en el resto del proyecto.
+_PROFILE_SWITCH_COMMANDS = {
+    "/modo investigacion": "research",
+    "/modo investigación": "research",
+    "/modo research": "research",
+    "/modo seguridad": "default",
+    "/modo default": "default",
+    "/modo codigo": "default",
+    "/modo código": "default",
+}
+
+# Perfil activo por conversación -- separado de `_conversations` (mismo
+# criterio: vive en memoria, se pierde al reiniciar el proceso). Default
+# "default" para cualquier conv_id no visto todavía.
+_conversation_profiles: dict[str, str] = {}
+
+
+def _system_prompt_for_profile(profile_name: str) -> str:
+    return RESEARCH_SYSTEM_PROMPT if profile_name == "research" else SYSTEM_PROMPT
+
+
+def _tools_for_profile(profile_name: str, all_tools: list[dict]) -> list[dict]:
+    if profile_name != "research":
+        return all_tools
+    return [t for t in all_tools if t["function"]["name"] in _RESEARCH_TOOL_NAMES]
 
 
 def _phone_status_note() -> dict:
@@ -699,13 +817,110 @@ def _obsidian_gate_error(history: list[dict]) -> str | None:
 
 
 async def run_agent(message: str, conversation_id: str | None) -> tuple[str, str, list[dict]]:
+    """Entry point real -- maneja el comando de cambio de perfil (corto-
+    circuita sin llamar al LLM) y, si el perfil activo de esta conversación
+    es "research", activa el override de vault/embeddings (ver
+    app/obsidian/profile.py) para TODA la llamada antes de delegar en
+    `_run_agent_turn`, que es el loop de siempre sin cambios de fondo."""
     conv_id = conversation_id or "default"
-    tools = openai_tool_schemas()
+
+    switch_target = _PROFILE_SWITCH_COMMANDS.get(message.strip().lower())
+    if switch_target is not None:
+        _conversation_profiles[conv_id] = switch_target
+        history = _conversations.setdefault(conv_id, [])
+        new_system = _system_prompt_for_profile(switch_target)
+        if history and history[0].get("role") == "system":
+            history[0]["content"] = new_system
+        else:
+            history.insert(0, {"role": "system", "content": new_system})
+        if switch_target == "research":
+            Path(settings.research_working_dir).mkdir(parents=True, exist_ok=True)
+            reply = (
+                "Cambié al perfil de investigación científica -- vault de Obsidian y directorio de "
+                f"trabajo separados ('{settings.research_working_dir}'), con un subconjunto de "
+                "herramientas enfocado en investigación. Escribí '/modo seguridad' para volver."
+            )
+        else:
+            reply = "Volví al perfil default (seguridad/código de JarvisRemote)."
+        history.append({"role": "assistant", "content": reply})
+        return conv_id, reply, []
+
+    active_profile = _conversation_profiles.get(conv_id, "default")
+    if active_profile == "research":
+        research_profile = vault_profile.VaultProfile(
+            vault_path=settings.research_vault_path, embeddings_path=settings.research_embeddings_path
+        )
+        with vault_profile.use_profile(research_profile):
+            return await _run_agent_turn(message, conv_id, active_profile)
+    return await _run_agent_turn(message, conv_id, active_profile)
+
+
+async def _run_agent_turn(message: str, conv_id: str, active_profile: str) -> tuple[str, str, list[dict]]:
+    """Wrapper fino sobre `_run_agent_turn_inner` -- ver el docstring de esa
+    función para el loop real. Este wrapper existe SOLO para garantizar el
+    apagado de la grabación automática (app/recording.py): con
+    try/finally acá afuera, `stop_recording()` se llama pase lo que pase
+    adentro -- return normal, un return temprano (ej. el fallback de visión),
+    o una excepción que se propague sin capturar -- así nunca queda una
+    grabación huérfana corriendo después de que termina el turno de chat.
+    Poner el try/finally DENTRO del loop (antes de cada return puntual)
+    hubiera sido frágil: alcanza con olvidarse UN return nuevo en el futuro
+    para volver a dejar una grabación corriendo para siempre."""
+    if recording.is_recording():
+        # No debería pasar nunca si el try/finally de abajo funciona bien --
+        # significaría que un turno anterior terminó sin pasar por acá
+        # (ej. el proceso del backend se reinició a la fuerza a mitad de una
+        # grabación). Defensivo: lo dejamos bien visible en el log en vez de
+        # arrancar una segunda grabación superpuesta sobre la vieja sin que
+        # nadie se entere.
+        logger.warning(
+            "_run_agent_turn: ya había una grabación activa al EMPEZAR un turno nuevo "
+            "(¿un turno anterior no llegó a su finally?) -- se sigue sin tocarla."
+        )
+    try:
+        return await _run_agent_turn_inner(message, conv_id, active_profile)
+    finally:
+        recording.stop_recording()
+
+
+async def _run_agent_turn_inner(message: str, conv_id: str, active_profile: str) -> tuple[str, str, list[dict]]:
+    # Arquitectura de skills (app/skills.py, ítem 5 de la cola 2026-08-12) --
+    # SOLO aplica al perfil "default": el perfil "research" ya tiene su
+    # propio subconjunto fijo y chico de tools (ver _tools_for_profile), no
+    # necesita clasificación adicional. Clasificación determinística por
+    # palabras clave sobre `message` -- si NINGÚN skill matchea, cae al
+    # comportamiento de siempre (SYSTEM_PROMPT completo + todas las tools),
+    # nunca al revés: el camino recortado solo se toma con clasificación
+    # confiada.
+    all_tool_schemas = openai_tool_schemas()
+    if active_profile == "default":
+        matched_skills = skills.classify(message)
+        if matched_skills:
+            active_tool_names = skills.tools_for_active_skills(matched_skills)
+            tools = [t for t in all_tool_schemas if t["function"]["name"] in active_tool_names]
+            effective_system_prompt = skills.prompt_for_active_skills(matched_skills)
+        else:
+            tools = all_tool_schemas
+            effective_system_prompt = SYSTEM_PROMPT
+    else:
+        tools = _tools_for_profile(active_profile, all_tool_schemas)
+        effective_system_prompt = _system_prompt_for_profile(active_profile)
+
     # Se mide una sola vez por turno (no cambia mientras corre run_agent) y se
     # reusa en cada pasada del loop de abajo -- ver _history_char_budget.
     history_budget_chars = _history_char_budget(len(json.dumps(tools, default=str, ensure_ascii=False)))
 
-    history = _conversations.setdefault(conv_id, [{"role": "system", "content": SYSTEM_PROMPT}])
+    # history[0] se actualiza en CADA turno (no solo la primera vez) para
+    # que el system prompt siempre refleje la clasificación de ESTE turno --
+    # una conversación puede pasar de un dominio a otro entre mensajes (ej.
+    # "escaneá este proyecto" y después "sacame una captura de pantalla"), y
+    # dejar un prompt viejo desalineado con las tools realmente ofrecidas
+    # sería peor que no optimizar nada.
+    history = _conversations.setdefault(conv_id, [])
+    if history and history[0].get("role") == "system":
+        history[0]["content"] = effective_system_prompt
+    else:
+        history.insert(0, {"role": "system", "content": effective_system_prompt})
     history.append({"role": "user", "content": message})
     _trim_history(history, settings.max_history_messages)
     _trim_history_by_budget(history, history_budget_chars)
