@@ -102,6 +102,16 @@
   };
   const DEFAULT_HALO_STYLE = { radiusScale: 1.00, opacity: 0.30 };
 
+  // Halo de investigación (centralidad + confianza, ver
+  // tray-app/ui/investigation_colors.py) -- a diferencia del halo de
+  // severidad (categórico, 3 colores fijos), acá el estilo es CONTINUO
+  // (radiusScale/opacity calculados en Python a partir de un float, no una
+  // de 3 categorías), así que no puede resolverse con un lookup por color
+  // fijo como SEVERITY_HALO_STYLE. `node.haloStyle`, si viene seteado desde
+  // Python (ver graph_view.py::set_graph), se usa DIRECTO -- ningún otro
+  // dominio (Codebase/Obsidian) manda ese campo, así que esto no cambia en
+  // absoluto el comportamiento existente del halo de severidad.
+
   function findGeometryDonor() {
     const nodes = Graph.graphData().nodes;
     return nodes.map(n => n.__threeObj).find(o => o && o.geometry && o.geometry.type === 'SphereGeometry') || null;
@@ -113,7 +123,7 @@
     const donor = findGeometryDonor();
     if (!donor) return; // todavía no se creó ninguna esfera real -- se reintenta en el próximo pase
     try {
-      const style = SEVERITY_HALO_STYLE[color] || DEFAULT_HALO_STYLE;
+      const style = node.haloStyle || SEVERITY_HALO_STYLE[color] || DEFAULT_HALO_STYLE;
       const geometry = new donor.geometry.constructor(HALO_RADIUS * style.radiusScale, 16, 16);
       const material = new donor.material.constructor({
         color,

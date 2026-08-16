@@ -13,6 +13,7 @@ from .models import ChatRequest, ChatResponse, ToolCallLog
 from .network_info import network_candidates
 from .phone_link import handle_incoming, is_phone_connected, register_phone, unregister_phone
 from .routers.codebase import router as codebase_router
+from .routers.investigation import router as investigation_router
 from .routers.obsidian import router as obsidian_router
 
 configure_logging()
@@ -21,6 +22,7 @@ logger = logging.getLogger("jarvis.main")
 app = FastAPI(title="Jarvis Remote Backend", version="0.1.0")
 app.include_router(codebase_router)
 app.include_router(obsidian_router)
+app.include_router(investigation_router)
 
 
 @app.get("/api/health")

@@ -27,6 +27,8 @@ CODEBASE_GRAPH_URL = f"{BASE_URL}/api/codebase/graph"
 CODEBASE_FILE_URL = f"{BASE_URL}/api/codebase/file"
 OBSIDIAN_NOTES_URL = f"{BASE_URL}/api/obsidian/notes"
 OBSIDIAN_GRAPH_URL = f"{BASE_URL}/api/obsidian/graph"
+INVESTIGATION_CASES_URL = f"{BASE_URL}/api/investigation/cases"
+INVESTIGATION_GRAPH_URL = f"{BASE_URL}/api/investigation"  # + /{case_id}/graph
 
 # Preferimos el intérprete del venv del backend (ahi están instaladas sus
 # dependencias). Si no existe, caemos a "python" del PATH.

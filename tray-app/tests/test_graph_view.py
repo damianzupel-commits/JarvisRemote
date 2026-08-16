@@ -147,6 +147,52 @@ def test_severity_color_fn_adds_halo_color_only_for_flagged_nodes(qtbot):
     assert by_id["a"]["color"] == "#ff0000"
 
 
+def _investigation_halo(node):
+    if node["id"] != "a":
+        return None
+    return {"color": "#3b82f6", "radiusScale": 1.4, "opacity": 0.5}
+
+
+def test_halo_fn_sends_both_severity_color_and_explicit_halo_style(qtbot):
+    """El halo de investigación (centralidad+confianza, ver
+    ui/investigation_colors.py) manda un estilo CONTINUO explícito, a
+    diferencia del halo de severidad (3 colores fijos, estilo resuelto por
+    lookup del lado de graph3d.html) -- graph_view.py tiene que mandar
+    'haloStyle' además de 'severityColor' cuando viene de halo_fn."""
+    from ui.graph_view import GraphView
+
+    view = GraphView()
+    qtbot.addWidget(view)
+    qtbot.waitUntil(lambda: view._ready is True, timeout=8000)
+
+    view.set_graph(NODES, EDGES, id_key="id", color_fn=_color, label_fn=_label, halo_fn=_investigation_halo)
+
+    data = _read_graph_data(qtbot, view)
+    by_id = {n["id"]: n for n in data["nodes"]}
+    assert by_id["a"]["severityColor"] == "#3b82f6"
+    assert by_id["a"]["haloStyle"] == {"radiusScale": 1.4, "opacity": 0.5}
+    assert "severityColor" not in by_id["b"]
+    assert "haloStyle" not in by_id["b"]
+
+
+def test_halo_fn_takes_precedence_over_severity_color_fn_if_both_given(qtbot):
+    from ui.graph_view import GraphView
+
+    view = GraphView()
+    qtbot.addWidget(view)
+    qtbot.waitUntil(lambda: view._ready is True, timeout=8000)
+
+    view.set_graph(
+        NODES, EDGES, id_key="id", color_fn=_color, label_fn=_label,
+        severity_color_fn=_severity_color, halo_fn=_investigation_halo,
+    )
+
+    data = _read_graph_data(qtbot, view)
+    # halo_fn devuelve #3b82f6 para "a" -- gana sobre severity_color_fn
+    # (#ef4444), que también aplicaba a "a".
+    assert data and next(n for n in data["nodes"] if n["id"] == "a")["severityColor"] == "#3b82f6"
+
+
 def test_no_severity_color_fn_means_no_severity_color_key(qtbot):
     from ui.graph_view import GraphView
 

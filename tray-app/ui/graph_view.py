@@ -113,14 +113,33 @@ class GraphView(QWidget):
         color_fn: Callable[[dict], str],
         label_fn: Callable[[dict], str],
         severity_color_fn: Callable[[dict], str | None] | None = None,
+        halo_fn: Callable[[dict], dict | None] | None = None,
     ) -> None:
+        """`severity_color_fn` (Codebase/Obsidian) sigue devolviendo solo un
+        color -- el estilo del halo (tamaño/opacidad) sale del lookup fijo
+        por color de graph3d.html (`SEVERITY_HALO_STYLE`), sin cambios.
+
+        `halo_fn` (nuevo, investigación -- ver ui/investigation_colors.py)
+        devuelve el halo COMPLETO ya calculado: `{"color":..., "radiusScale":
+        ..., "opacity":...}` o `None`. Pensado para halos con estilo
+        CONTINUO (centralidad/confianza son floats, no 3 categorías fijas
+        como severidad) -- graph3d.html usa `node.haloStyle` directo en vez
+        de buscarlo por color cuando está presente. Mutuamente excluyente
+        con `severity_color_fn` en la práctica (cada dominio usa uno de los
+        dos), pero no se valida acá -- si algún día un caller pasara los
+        dos, `halo_fn` gana (ver abajo)."""
+
         def _node_payload(n: dict) -> dict:
             node = {"id": n[id_key], "label": label_fn(n), "color": color_fn(n)}
+            halo = halo_fn(n) if halo_fn else None
             severity_color = severity_color_fn(n) if severity_color_fn else None
             # Solo se manda la clave si hay halo -- graph3d.html la trata como
             # "sin marca" cuando falta, así no hace falta pasarle `null` por
             # cada nodo sin hallazgos.
-            if severity_color:
+            if halo:
+                node["severityColor"] = halo["color"]
+                node["haloStyle"] = {"radiusScale": halo["radiusScale"], "opacity": halo["opacity"]}
+            elif severity_color:
                 node["severityColor"] = severity_color
             return node
 

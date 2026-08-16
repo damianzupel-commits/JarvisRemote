@@ -37,6 +37,7 @@ import config
 import process_manager
 from ui.chat_view import ChatView
 from ui.codebase_view import CodebaseView
+from ui.investigation_view import InvestigationView
 from ui.obsidian_view import ObsidianView
 from ui.settings_window import SettingsDialog
 from ui.theming import force_dark_title_bar
@@ -153,9 +154,11 @@ class MainWindow(QMainWindow):
         self.chat_view = ChatView()
         self.codebase_view = CodebaseView()
         self.obsidian_view = ObsidianView()
+        self.investigation_view = InvestigationView()
         self.tabs.addTab(self.chat_view, "💬  Chat")
         self.tabs.addTab(self.codebase_view, "🗂  Codebase")
         self.tabs.addTab(self.obsidian_view, "🧠  Obsidian")
+        self.tabs.addTab(self.investigation_view, "🔎  Investigación")
         root.addWidget(self.tabs, stretch=1)
 
         self.setCentralWidget(central)

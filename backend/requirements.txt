@@ -43,3 +43,39 @@ clang-tidy>=20
 # (requieren Node.js / JVM respectivamente).
 ruff>=0.6
 mypy>=1.11
+# Firma real del log append-only del módulo de investigación (ver
+# app/investigation/keys.py/log.py) -- ya estaba instalada como dependencia
+# transitiva de otra cosa, pero es carga real para una pieza de seguridad,
+# así que queda pinneada explícita en vez de confiar en que algo más la siga
+# arrastrando.
+cryptography>=42
+# Centralidad de intermediación real para el halo del grafo de investigación
+# (ver app/investigation/graph_metrics.py, spec sección 3: "nodo con alta
+# centralidad de intermediación = candidato a pivote") y detección de
+# comunidades (paso 7, Louvain) -- ninguna de las dos existía antes en el
+# proyecto.
+networkx>=3.3
+# Parseo real de timestamps para la timeline forense (ver
+# app/investigation/timeline.py, spec sección 4) -- datos reales de exports/
+# logs vienen en formatos de fecha muy variados, `datetime.fromisoformat` de
+# la stdlib es demasiado estricto (básicamente solo ISO 8601 exacto) para
+# eso.
+python-dateutil>=2.9
+# Extracción de texto de PDF/DOCX para la pasada de NER (spec sección 2,
+# paso 6: "Documentos PDF/DOCX -> extracción de texto para pasada de
+# NER"). python-docx ya estaba instalada como dependencia transitiva de
+# otra cosa (queda pinneada explícita, mismo criterio que cryptography más
+# arriba); pypdf es nueva -- pura Python, sin binario externo que instalar
+# aparte (a diferencia de cppcheck/clang-tidy más arriba, este caso no lo
+# necesita).
+pypdf>=5
+python-docx>=1.2
+# Export de informe del caso (spec sección 7, paso 8 -- último del orden de
+# implementación): "grafo renderizado" es un requisito literal de la spec,
+# no un nice-to-have -- matplotlib + el layout propio de networkx
+# (spring_layout) generan una imagen PNG real del grafo del caso, embebida
+# en el reporte. fpdf2 (pura Python, sin dependencia nativa tipo GTK/Pango
+# que sí pide weasyprint en Windows) arma el PDF directo desde los mismos
+# datos que el Markdown, sin necesitar un conversor markdown->PDF aparte.
+matplotlib>=3.9
+fpdf2>=2.7

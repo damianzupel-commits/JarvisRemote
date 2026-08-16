@@ -1,12 +1,14 @@
 """Tests de la ventana principal: barra superior (selector de modelo,
-ajustes) y las tres pestañas (Chat/Codebase/Obsidian). Los tests de contenido
-de cada pestaña viven en test_chat_view.py/test_codebase_view.py/
-test_obsidian_view.py -- acá solo se prueba el wiring de MainWindow."""
+ajustes) y las cuatro pestañas (Chat/Codebase/Obsidian/Investigación). Los
+tests de contenido de cada pestaña viven en test_chat_view.py/
+test_codebase_view.py/test_obsidian_view.py/test_investigation_view.py --
+acá solo se prueba el wiring de MainWindow."""
 
 import requests
 
 from ui.chat_view import ChatView
 from ui.codebase_view import CodebaseView
+from ui.investigation_view import InvestigationView
 from ui.main_window import MainWindow
 from ui.obsidian_view import ObsidianView
 from ui.settings_window import SettingsDialog
@@ -17,30 +19,32 @@ class _FakeResponse:
         pass
 
     def json(self):
-        return {"notes": [], "projects": [], "nodes": [], "edges": []}
+        return {"notes": [], "projects": [], "nodes": [], "edges": [], "cases": []}
 
 
 def _no_network(monkeypatch):
-    # ObsidianView pide su grafo de notas y CodebaseView pide el último
-    # proyecto indexado apenas se construyen -- sin esto, cada test de
-    # MainWindow intentaría pegarle al backend real.
+    # ObsidianView/CodebaseView/InvestigationView piden datos apenas se
+    # construyen -- sin esto, cada test de MainWindow intentaría pegarle al
+    # backend real.
     monkeypatch.setattr(requests, "get", lambda *a, **k: _FakeResponse())
 
 
-def test_has_the_three_expected_tabs(qtbot, monkeypatch):
+def test_has_the_four_expected_tabs(qtbot, monkeypatch):
     _no_network(monkeypatch)
     win = MainWindow()
     qtbot.addWidget(win)
 
     labels = [win.tabs.tabText(i) for i in range(win.tabs.count())]
-    assert len(labels) == 3
+    assert len(labels) == 4
     assert "Chat" in labels[0]
     assert "Codebase" in labels[1]
     assert "Obsidian" in labels[2]
+    assert "Investigación" in labels[3]
 
     assert isinstance(win.chat_view, ChatView)
     assert isinstance(win.codebase_view, CodebaseView)
     assert isinstance(win.obsidian_view, ObsidianView)
+    assert isinstance(win.investigation_view, InvestigationView)
 
 
 def test_model_selector_shows_the_three_tiers_with_friendly_labels(qtbot, monkeypatch):
