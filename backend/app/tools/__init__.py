@@ -14,6 +14,7 @@ diferencia, solo ve una lista plana de tools.
 
 import asyncio
 import inspect
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Literal
 
@@ -49,6 +50,41 @@ _BLOCKING_MODULES = ("app.tools.desktop",)
 # devuelve la corrutina sin ejecutarla, nunca corre de verdad.
 _BLOCKING_TOOL_NAMES = frozenset({"nmap_scan", "sqlmap_scan", "packet_capture_scan", "packet_capture_analyze", "zap_scan"})
 
+# Grabación automática de pantalla (ver app/recording.py) alrededor del
+# pipeline real de auditoría->fix->test -- pedido explícito de Damian
+# 2026-08-13, motivación completa en el docstring de app/recording.py.
+# Clasificado por NOMBRE de tool (no por módulo como _BLOCKING_MODULES de
+# arriba) porque el pipeline real cruza varios archivos de app/tools/
+# (security_scan.py, quality_scan.py, test_run.py, selfrepair.py,
+# audit_report.py, code_edit.py) que también tienen tools de solo
+# lectura/navegación que NO valen la pena grabar (security_get_finding/
+# quality_get_finding son lookups puntuales de un snippet, codebase_* es
+# indexado/búsqueda) -- clasificar por módulo entero agarraría esas también,
+# fragmentando "todo el flujo de punta a punta" en ruido de lookups en vez
+# de las acciones reales del pipeline. Verificado 2026-08-13 contra el
+# registro real (grep de `register_tool(` en esos archivos), no una lista
+# adivinada:
+# - security_scan_project / security_triage_findings / security_audit_find_fix_verify
+#   (app/tools/security_scan.py): escanear, triage, y el ciclo atómico
+#   apply+commit+verify.
+# - quality_scan_project (app/tools/quality_scan.py).
+# - code_apply_fix (app/tools/code_edit.py): el paso de FIX cuando no se usa
+#   el ciclo atómico de arriba -- vive en un archivo distinto a los otros
+#   pero es la misma etapa del pipeline (aplicar una corrección real).
+# - code_run_tests (app/tools/test_run.py): el paso de TEST.
+# - selfrepair_propose_fix (app/tools/selfrepair.py): auto-reparación del
+#   propio backend de Jarvis.
+# - audit_generate_report (app/tools/audit_report.py): cierre del ciclo.
+_RECORDABLE_TOOL_NAMES = frozenset({
+    "security_scan_project",
+    "security_triage_findings",
+    "security_audit_find_fix_verify",
+    "quality_scan_project",
+    "code_apply_fix",
+    "code_run_tests",
+    "selfrepair_propose_fix",
+    "audit_generate_report",
+})
 
 
 @dataclass
@@ -107,6 +143,34 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
         raise ValueError(f"Tool desconocida: {name}")
     tool = _registry[name]
 
+    if name in _RECORDABLE_TOOL_NAMES:
+        # UNA sola grabación continua por turno, no un clip por tool call --
+        # ver docstring de _RECORDABLE_TOOL_NAMES. Si ya está grabando (ej.
+        # esta es la 2da+ tool recordable de este turno, o Damian arrancó
+        # una a mano con recording_start antes) no se toca nada; el guard
+        # está acá adentro (no antes, en el caller) para que aplique sea
+        # cual sea el punto de entrada real a call_tool.
+        from ..config import settings
+        from .. import recording
+
+        if settings.screen_recording_enabled and not recording.is_recording():
+            try:
+                recording.start_recording(session_name=name)
+            except recording.RecordingAlreadyActiveError:
+                # Carrera rarísima (ver is_recording() recién arriba) -- no
+                # es motivo para abortar la tool call real, solo lo dejamos
+                # en el log general en vez de romper el pipeline entero.
+                logging.getLogger("jarvis.recording").warning(
+                    "recording ya activa justo al arrancar %s, se sigue sin grabación nueva", name
+                )
+            except Exception as exc:
+                # ffmpeg no encontrado, permisos, etc. -- la grabación es un
+                # extra sobre el pipeline real, nunca debe bloquear la
+                # auditoría/fix/test en sí.
+                logging.getLogger("jarvis.recording").warning(
+                    "no se pudo arrancar la grabación automática para %s: %s", name, exc
+                )
+
     if tool.target == "phone":
         from ..phone_link import dispatch_to_phone
 
@@ -161,6 +225,7 @@ from . import investigation  # noqa: E402,F401
 from . import pentest_sqlmap  # noqa: E402,F401
 from . import pentest_wireshark  # noqa: E402,F401
 from . import pentest_zap  # noqa: E402,F401
+from . import recording  # noqa: E402,F401
 
 # generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
 # propósito, no importadas -- no es un problema de estilo, es una precaución
