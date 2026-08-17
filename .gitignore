@@ -108,6 +108,14 @@ backend/obsidian_vault/jarvis/vault-de-obsidian-con-autoria-separada.md
 # regenera solo, y puede referenciar rutas/proyectos privados del usuario.
 backend/data/
 
+# Datos sensibles reales del backend (la carpeta correcta es backend/app/data/,
+# NO backend/data/ de arriba): credenciales cifradas de formularios (*.dpapi) y
+# capturas de preview de formularios (form_previews/, PNG en claro que pueden
+# contener datos personales). Nunca se publican.
+backend/app/data/
+*.dpapi
+form_previews/
+
 # Artefactos de build/test sueltos en la raíz -- no son parte del código fuente
 # (el APK se genera con android-app/deploy.ps1; el .onnx es un duplicado de
 # tray-app/models/hey_jarvis.onnx).
