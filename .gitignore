@@ -1,13 +1,58 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 .venv/
 venv/
+env/
+ENV/
 *.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
 
 # Env / secrets
 .env
+.env.*
+!.env.example
 *.local
+secrets.json
+credentials.json
+*credentials*.json
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+*_token.json
+*_api_key.json
+.netrc
+
+# Logs (todos) -- se regeneran solos, nunca son codigo fuente
+*.log
+*.log.*
+
+# Estado local del agente Claude Code (worktrees, settings locales) -- copias
+# completas del repo y config de esta maquina, no son parte del proyecto.
+.claude/
+
+# Grabaciones de pantalla del agente (backend/app/recording.py) -- binarios
+# grandes que se regeneran en cada corrida.
+content/recordings/
+*.mp4
+*.mkv
+*.mov
+*.avi
+
+# Capturas sueltas de escritorio (artefacto de debug, se regenera)
+backend/desktop_screenshot.png
+
+# Documentos Word personales sueltos en la raiz (ver docs/*.docx mas abajo)
+/*.docx
 
 # Autorización de pentesting activo -- local a cada instalación, nunca en git
 # (ver backend/authorized_targets.yaml.example para el template)
@@ -29,6 +74,11 @@ tray-app/voice_debug/
 # ComfyUI (generate_image/generate_video): log de stdout/stderr del subproceso,
 # se regenera solo (ver _comfyui_shared.py).
 backend/comfyui.log
+
+# stdout/stderr del backend cuando se arranca manualmente (fuera de la tray app)
+# redirigidos a archivo para evitar que el pipe se llene y cuelgue el proceso.
+backend/backend_stdout.log
+backend/backend_stderr.log
 
 # Logs de AIDA64 (temperaturas/voltajes) -- telemetría local de esta máquina
 # para diagnosticar apagados físicos durante cargas de GPU, ver INFORME_COMPLETO.md
