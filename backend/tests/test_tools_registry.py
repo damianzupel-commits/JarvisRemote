@@ -29,8 +29,17 @@ def test_pc_tools_default_to_pc_target():
     assert tools["fs_list_dir"].target == "pc"
     assert tools["browser_open"].target == "pc"
     assert tools["jarvis_reflect"].target == "pc"
-    assert tools["generate_video"].target == "pc"
-    assert tools["generate_image"].target == "pc"
+    # generate_video/generate_image (video_gen.py/image_gen.py) están
+    # deliberadamente deshabilitadas desde 2026-07-27 (no importadas en
+    # app/tools/__init__.py, ver el comentario ahí) tras un apagado físico
+    # real de la PC en medio de una generación -- no deberían estar
+    # registradas. Este assert quedó estancado referenciándolas de cuando sí
+    # lo estaban; test-order dependency real encontrada 2026-08-11 (algún
+    # otro test importa video_gen.py directo, registrándolas igual como
+    # efecto secundario si corre antes en la MISMA sesión de pytest) -- lo
+    # correcto es no depender de que estén, sea cual sea el orden real.
+    assert "generate_video" not in tools or tools["generate_video"].target == "pc"
+    assert "generate_image" not in tools or tools["generate_image"].target == "pc"
 
 
 def test_openai_tool_schemas_expose_single_flat_list():
@@ -90,3 +99,49 @@ async def test_call_tool_uses_default_dispatch_timeout_when_no_timeout_argument(
     await call_tool("phone_tap", {"x": 1, "y": 2})
 
     assert captured["timeout"] is None
+
+
+@pytest.mark.anyio
+async def test_call_tool_routes_desktop_module_tools_through_a_thread(monkeypatch):
+    """Bug real (informe de arquitectura 2026-08-10, corregido vía Opción C):
+    app/tools/desktop.py corre pyautogui/pywinauto (sync, con sleeps/polls
+    reales de varios segundos) directo en el thread del event loop de
+    FastAPI, bloqueando /api/health, el WebSocket del celular, y cualquier
+    otra tool call mientras tanto. call_tool ahora las corre vía
+    asyncio.to_thread -- acá se mockea to_thread (no queremos pyautogui real
+    en la suite) para probar que SE USA para tools de ese módulo."""
+    from app import tools as tools_module
+
+    captured = {}
+
+    async def fake_to_thread(func, **kwargs):
+        captured["func"] = func
+        captured["kwargs"] = kwargs
+        return {"ok": True, "via": "thread"}
+
+    monkeypatch.setattr(tools_module.asyncio, "to_thread", fake_to_thread)
+
+    result = await call_tool("desktop_click", {"x": 10, "y": 20})
+
+    assert result == {"ok": True, "via": "thread"}
+    assert captured["func"].__module__ == "app.tools.desktop"
+    assert captured["kwargs"] == {"x": 10, "y": 20}
+
+
+@pytest.mark.anyio
+async def test_call_tool_does_not_route_non_desktop_pc_tools_through_a_thread(monkeypatch):
+    from app import tools as tools_module
+
+    to_thread_called = False
+
+    async def fake_to_thread(func, **kwargs):
+        nonlocal to_thread_called
+        to_thread_called = True
+        return func(**kwargs)
+
+    monkeypatch.setattr(tools_module.asyncio, "to_thread", fake_to_thread)
+
+    result = await call_tool("fs_list_dir", {"path": "."})
+
+    assert "entries" in result
+    assert to_thread_called is False

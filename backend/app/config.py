@@ -293,6 +293,317 @@ class Settings:
     # mayoría de países).
     nmap_authorized_targets: str = os.getenv("NMAP_AUTHORIZED_TARGETS", "")
 
+    # Fuente ÚNICA y compartida de autorización para TODAS las tools de
+    # pentesting activo (nmap_scan ya migrado; sqlmap/tshark/metasploit/zap/
+    # nessus la reusan según se van agregando, ver app/network/guardrail.py) --
+    # decisión de Damian 2026-08-13: un solo archivo en vez de una whitelist
+    # separada por tool, para no tener 6 listas que se puedan desincronizar.
+    # Mismo criterio no negociable que NMAP_AUTHORIZED_TARGETS: el USUARIO
+    # edita este archivo a mano, ninguna tool ni el LLM puede escribirlo. Un
+    # target en la lista NO necesita estar corriendo/alcanzable en este
+    # momento para estar "autorizado" -- los labs (PyGoat/NodeGoat/etc.) se
+    # levantan bajo demanda, así que la autorización es independiente de que
+    # el target esté vivo ahora mismo (eso lo valida cada tool al ejecutar,
+    # nunca el gate). NMAP_AUTHORIZED_TARGETS de arriba se sigue leyendo
+    # además de este archivo, por retrocompatibilidad -- no se rompe una
+    # config que ya tenías andando.
+    authorized_targets_path: str = os.getenv(
+        "AUTHORIZED_TARGETS_PATH", str(Path(__file__).resolve().parent.parent / "authorized_targets.yaml")
+    )
+
+    # sqlmap_scan (ver app/tools/pentest_sqlmap.py + app/pentest/) -- primera
+    # tool de pentesting ACTIVO del proyecto (a diferencia de nmap_scan, que
+    # es reconocimiento pasivo: puertos/servicios, nunca envía payloads de
+    # ataque). Gateada por el mismo guardrail no negociable de
+    # authorized_targets.yaml, aplicado sobre el HOST de la URL antes de
+    # correr nada. sqlmap es pura Python (sin UAC/admin, a diferencia de
+    # nmap/Npcap) -- instalación manual: 'git clone --depth 1
+    # https://github.com/sqlmapproject/sqlmap.git' y apuntar SQLMAP_PATH al
+    # sqlmap.py resultante.
+    sqlmap_enabled: bool = _bool(os.getenv("SQLMAP_ENABLED"), True)
+    sqlmap_path: str = os.getenv("SQLMAP_PATH", str(Path.home() / "sqlmap-dev" / "sqlmap.py"))
+    # REST API de SQLMap (sqlmapapi.py) -- SOLO localhost, nunca expuesta a
+    # la red; Jarvis la arranca sola (lazy, si no está corriendo ya) cuando
+    # hace falta. Credenciales HTTP Basic generadas una vez y persistidas
+    # (ver app/pentest/sqlmap_client.py::_load_or_create_credentials) --
+    # no hace falta configurarlas a mano.
+    sqlmap_api_host: str = os.getenv("SQLMAP_API_HOST", "127.0.0.1")
+    sqlmap_api_port: int = int(os.getenv("SQLMAP_API_PORT", "8775"))
+    sqlmap_api_credentials_path: str = os.getenv(
+        "SQLMAP_API_CREDENTIALS_PATH", str(Path(__file__).resolve().parent.parent / "sqlmap_api_credentials.json")
+    )
+
+    # packet_capture_scan / packet_capture_analyze (ver app/pentest/
+    # packet_capture.py, "Wireshark" en la spec de Damian) -- implementado con
+    # `scapy` (pip, sin binario externo) en vez de shellear a tshark.exe,
+    # decisión documentada en el docstring del módulo. La mitad "analizar un
+    # .pcap ya existente" no necesita Npcap ni nada más; la mitad "capturar en
+    # vivo" sí (mismo click de UAC que nmap, ver https://npcap.com/#download).
+    # Gateada distinto del resto: no hay un "target" remoto único, hay una
+    # interfaz LOCAL -- exige host_filter no vacío, cada host pasa por el
+    # mismo authorized_targets.yaml compartido (nunca captura sin acotar).
+    packet_capture_enabled: bool = _bool(os.getenv("PACKET_CAPTURE_ENABLED"), True)
+    pcap_output_dir: str = os.getenv(
+        "PCAP_OUTPUT_DIR", str(Path(__file__).resolve().parent.parent.parent / "content" / "captures")
+    )
+
+    # zap_scan (ver app/tools/pentest_zap.py + app/pentest/zap_client.py,
+    # checkpoint 5 -- OWASP ZAP en vez de Burp Suite Pro, decisión de Damian
+    # 2026-08-13: ZAP es gratis y tiene REST API completa, Burp Pro necesita
+    # licencia paga que no tiene). Gateado por el mismo guardrail no
+    # negociable de authorized_targets.yaml, sobre el HOST de la URL, igual
+    # que sqlmap_scan. ZAP se distribuye "Crossplatform" (zip, sin
+    # instalador/UAC -- necesita Java 11+, ya presente en esta máquina) --
+    # instalación manual: descargar el zip "Crossplatform" desde
+    # https://github.com/zaproxy/zaproxy/releases/latest y apuntar ZAP_PATH
+    # al zap-X.Y.Z.jar resultante.
+    zap_enabled: bool = _bool(os.getenv("ZAP_ENABLED"), True)
+    zap_path: str = os.getenv("ZAP_PATH", str(Path.home() / "zap-2.17.0" / "zap-2.17.0.jar"))
+    # Daemon REST API de ZAP -- SOLO localhost, arrancado lazy por Jarvis
+    # (mismo criterio que sqlmapapi.py). API key generada una vez y
+    # persistida (ver app/pentest/zap_client.py::_load_or_create_api_key).
+    zap_api_host: str = os.getenv("ZAP_API_HOST", "127.0.0.1")
+    zap_api_port: int = int(os.getenv("ZAP_API_PORT", "8090"))
+    zap_api_key_path: str = os.getenv(
+        "ZAP_API_KEY_PATH", str(Path(__file__).resolve().parent.parent / "zap_api_key.json")
+    )
+
+    # opencode_run_task (ver app/tools/opencode.py, agregado 2026-08-11) --
+    # delega tareas pesadas de escritura/edición de código a la CLI de
+    # OpenCode (github.com/sst/opencode, MIT), apuntada al mismo Ollama local
+    # que ya sirve jarvis-text-v2 (ver provider "jarvis-ollama" en
+    # ~/.config/opencode/opencode.json) en vez de al propio loop de agente de
+    # Jarvis. Mismo binario para todas las instalaciones por default (instalado
+    # vía `curl -fsSL https://opencode.ai/install | bash`, que en Windows deja
+    # el .exe en %USERPROFILE%\.opencode\bin) -- configurable por si en otra
+    # máquina quedó en otro lado.
+    opencode_bin_path: str = os.getenv(
+        "OPENCODE_BIN_PATH", str(Path.home() / ".opencode" / "bin" / "opencode.exe")
+    )
+    opencode_default_model: str = os.getenv("OPENCODE_DEFAULT_MODEL", "jarvis-ollama/jarvis-text-v2")
+
+    # cloud_expert_code/cloud_expert_marketing (ver app/tools/cloud_expert.py,
+    # agregado 2026-08-12) -- delegan a Gemini Flash (API gratuita de Google
+    # AI Studio, ~15 req/min y 1M tokens/día en el free tier, sin tarjeta) un
+    # primer borrador de código o de texto de marketing. Reusa el SDK de
+    # OpenAI (mismo patrón que llm_client.py) apuntado al endpoint
+    # OpenAI-compatible real de Gemini (generativelanguage.googleapis.com/
+    # v1beta/openai/), en vez de escribir un cliente REST propio -- Google
+    # publica esta compatibilidad justamente para no tener que reimplementar
+    # el cliente por proveedor. Vacío por default a propósito: sin
+    # GOOGLE_AI_API_KEY seteada en backend/.env, ambas tools fallan con un
+    # error claro en vez de intentar una llamada que va a rechazar la API.
+    google_ai_api_key: str = os.getenv("GOOGLE_AI_API_KEY", "")
+    google_ai_base_url: str = os.getenv(
+        "GOOGLE_AI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"
+    )
+    google_ai_model: str = os.getenv("GOOGLE_AI_MODEL", "gemini-2.5-flash")
+
+    # Perfil de investigación científica (ver app/obsidian/profile.py +
+    # app/agent.py, agregado 2026-08-12) -- vault y directorio de trabajo
+    # SEPARADOS del vault/codebase de seguridad de JarvisRemote, para que
+    # Damian pueda usar a Jarvis como asistente de su propia investigación
+    # de biotecnología sin mezclar esas notas con las de auditoría de
+    # código. Mismo backend/modelo que el perfil default -- no es una
+    # segunda instancia corriendo en paralelo (12GB de VRAM no da para dos
+    # modelos grandes a la vez), es un cambio de contexto dentro de la
+    # misma conversación/proceso.
+    research_vault_path: str = os.getenv(
+        "RESEARCH_VAULT_PATH", str(Path(__file__).resolve().parent.parent / "obsidian_vault_investigacion")
+    )
+    research_embeddings_path: str = os.getenv(
+        "RESEARCH_EMBEDDINGS_PATH", str(Path(__file__).resolve().parent.parent / "data" / "research_embeddings.json")
+    )
+    research_working_dir: str = os.getenv(
+        "RESEARCH_WORKING_DIR", str(Path.home() / "Documents" / "Investigacion")
+    )
+
+    # Módulo de investigación (análisis de enlaces y evidencia digital, ver
+    # app/investigation/ -- spec de Damian, 2026-08-12). Tres directorios
+    # separados a propósito, mismo criterio que el resto del proyecto
+    # (nunca mezclar cache/datos derivados con el vault/repo real):
+    # - investigation_cases_dir: un subdirectorio por caso, CADA UNO su
+    #   propio repo git (versiona grafo/log/metadata -- nunca los binarios).
+    # - investigation_artifact_store_dir: almacén único, compartido entre
+    #   TODOS los casos, de solo lectura, indexado por sha256 -- NUNCA
+    #   versionado con git (decisión explícita de Damian: los binarios
+    #   originales no van a git).
+    # - investigation_keys_dir: clave de firma Ed25519 del log append-only
+    #   (ver app/investigation/keys.py), protegida con DPAPI -- vive fuera
+    #   de cualquier directorio versionado o exportable por accidente.
+    investigation_cases_dir: str = os.getenv(
+        "INVESTIGATION_CASES_DIR", str(Path(__file__).resolve().parent.parent / "investigation_cases")
+    )
+    investigation_artifact_store_dir: str = os.getenv(
+        "INVESTIGATION_ARTIFACT_STORE_DIR",
+        str(Path(__file__).resolve().parent.parent / "data" / "investigation_artifacts"),
+    )
+    investigation_keys_dir: str = os.getenv(
+        "INVESTIGATION_KEYS_DIR", str(Path(__file__).resolve().parent.parent / "data" / "investigation_keys")
+    )
+
+    # Módulo de protección contra malware (ver app/malware/ -- spec de
+    # Damian, 2026-08-16). Motor: YARA (reglas de firmas + heurística propia)
+    # + ClamAV (clamd, firmas masivas) + capa conductual (watchdog/psutil)
+    # desde el arranque, ninguno como fase 2. Reusa el MISMO artifact_store
+    # de app/investigation/ (INVESTIGATION_ARTIFACT_STORE_DIR de arriba, no
+    # una copia separada) y el mismo mecanismo de firma Ed25519
+    # (investigation/keys.py, mismo INVESTIGATION_KEYS_DIR) para su propio
+    # log append-only -- decisión de diseño C de la ronda de preguntas: un
+    # hallazgo de malware queda igual de trazable/verificable que un caso de
+    # investigación, sin forzarlo dentro del modelo de "caso" (que es sobre
+    # personas/timelines, un dominio distinto).
+    malware_log_path: str = os.getenv(
+        "MALWARE_LOG_PATH", str(Path(__file__).resolve().parent.parent / "data" / "malware_log.jsonl")
+    )
+
+    # Carpeta donde se mueven los archivos sospechosos en cuarentena (fuera de
+    # cualquier ruta ejecutable/de inicio automático) -- reversible por
+    # default (mover, no borrar, decisión de la pregunta 3: cuarentena por
+    # default, eliminación definitiva solo con confirm=true explícito, mismo
+    # patrón dry-run->confirm=true que code_apply_fix).
+    malware_quarantine_dir: str = os.getenv(
+        "MALWARE_QUARANTINE_DIR", str(Path(__file__).resolve().parent.parent / "data" / "malware_quarantine")
+    )
+
+    # Reglas YARA -- directorio con archivos .yar/.yara, cargados todos al
+    # compilar. Viene con un set inicial propio (ver
+    # app/malware/rules/starter.yar) mas lo que Damian agregue a mano (ej.
+    # reglas descargadas de github.com/Yara-Rules/rules o similares).
+    malware_yara_rules_dir: str = os.getenv(
+        "MALWARE_YARA_RULES_DIR", str(Path(__file__).resolve().parent.parent / "app" / "malware" / "rules")
+    )
+
+    # FIM (File Integrity Monitoring, auto-protección parte A) -- manifiesto
+    # baseline (hash SHA-256 por archivo vigilado) y lista de archivos/carpetas
+    # críticos de la propia instalación de Jarvis. Coma-separado, rutas
+    # absolutas o relativas a backend/. Default: el gate de pentesting
+    # (authorized_targets.yaml), las claves de firma del módulo de
+    # investigación (que ahora también firman el log de malware), el .env con
+    # credenciales en texto plano, y el código fuente de app/ entero (para
+    # detectar una modificación no versionada -- ej. inyectada por un proceso
+    # malicioso -- antes del próximo `git status`).
+    malware_integrity_baseline_path: str = os.getenv(
+        "MALWARE_INTEGRITY_BASELINE_PATH", str(Path(__file__).resolve().parent.parent / "data" / "malware_integrity_baseline.json")
+    )
+    malware_integrity_watch_paths: str = os.getenv(
+        "MALWARE_INTEGRITY_WATCH_PATHS",
+        ",".join([
+            str(Path(__file__).resolve().parent.parent / "authorized_targets.yaml"),
+            str(Path(__file__).resolve().parent.parent / ".env"),
+            str(Path(__file__).resolve().parent.parent / "data" / "investigation_keys"),
+            str(Path(__file__).resolve().parent.parent / "app"),
+        ]),
+    )
+
+    # Vigilancia del proceso propio (auto-protección parte B, ver
+    # app/malware/process_monitor.py) -- procesos hijos inesperados del PID
+    # del backend y conexiones salientes fuera de lo esperado (LM Studio/
+    # Ollama local, ClamAV local, VirusTotal, Tailscale). Prendida por
+    # default (mismo criterio que el resto de las tools "sin fricción" del
+    # proyecto), con flag real para apagarla.
+    malware_process_monitor_enabled: bool = _bool(os.getenv("MALWARE_PROCESS_MONITOR_ENABLED"), True)
+
+    # ClamAV real vía el daemon `clamd` -- requiere instalación manual (ver
+    # backend/README.md, sección malware) + el servicio `clamd` corriendo en
+    # esta IP/puerto. Sin eso, malware_scan_path sigue funcionando con YARA +
+    # heurística conductual, solo se salta ClamAV con un aviso explícito (no
+    # falla el escaneo entero por una pieza optativa no instalada).
+    clamd_host: str = os.getenv("CLAMD_HOST", "127.0.0.1")
+    clamd_port: int = int(os.getenv("CLAMD_PORT", "3310"))
+    clamav_enabled: bool = _bool(os.getenv("CLAMAV_ENABLED"), True)
+
+    # VirusTotal -- SOLO confirmación selectiva de hashes ya marcados
+    # sospechosos localmente (decisión de la pregunta 5), nunca sube contenido
+    # de archivos. Vacío por default: sin VIRUSTOTAL_API_KEY, esa capa se
+    # salta con un aviso explícito (mismo criterio que GOOGLE_AI_API_KEY).
+    # Sacar una key gratis en https://www.virustotal.com/gui/join-us.
+    virustotal_api_key: str = os.getenv("VIRUSTOTAL_API_KEY", "")
+    virustotal_cache_path: str = os.getenv(
+        "VIRUSTOTAL_CACHE_PATH", str(Path(__file__).resolve().parent.parent / "data" / "virustotal_cache.json")
+    )
+    # Límite real del tier gratis: 4 req/min. Se deja margen (15s entre
+    # consultas = 4/min exacto) para no comerse baneos temporales por ráfagas.
+    virustotal_min_seconds_between_requests: float = float(os.getenv("VIRUSTOTAL_MIN_SECONDS_BETWEEN_REQUESTS", "15"))
+
+    # Sysmon (Sysinternals/Microsoft, driver YA firmado -- no es un driver
+    # propio) -- capa EXPERIMENTAL de auto-protección parte C (detección tipo
+    # EDR real: acceso a memoria del propio proceso, hijos remotos, etc.).
+    # Instalación manual (ver backend/README.md). Apagada por default a
+    # propósito: a diferencia del resto de este módulo (A+B, sólidos), C se
+    # documentó explícitamente como experimental -- Damian eligió sumarla
+    # igual sabiendo que la señal puede ser ruidosa/no confiable, así que
+    # arranca en false hasta que la instale y la prenda a mano.
+    sysmon_enabled: bool = _bool(os.getenv("SYSMON_ENABLED"), False)
+    sysmon_event_log_channel: str = os.getenv("SYSMON_EVENT_LOG_CHANNEL", "Microsoft-Windows-Sysmon/Operational")
+
+    # Escaneo completo del árbol bajo FS_ALLOWED_ROOT, corrido una vez cada 24h
+    # (decisión de la pregunta 2: escaneo diario, no semanal) por un loop en
+    # background arrancado en el startup del backend (ver app/main.py) --
+    # ninguna configuración de Task Scheduler de Windows necesaria aparte.
+    # Ojo: NO es "todo el disco C:\" literal (Windows/Program Files incluidos
+    # sería enormemente más lento y en su mayoría archivos del sistema que
+    # Windows Defender ya cubre) -- es el árbol completo de FS_ALLOWED_ROOT
+    # (la carpeta de usuario), que es lo que en la práctica contiene los
+    # archivos que el propio Damian descarga/crea/recibe. Configurable si
+    # de verdad se quiere escanear otra raíz.
+    malware_full_scan_enabled: bool = _bool(os.getenv("MALWARE_FULL_SCAN_ENABLED"), True)
+    malware_full_scan_interval_hours: float = float(os.getenv("MALWARE_FULL_SCAN_INTERVAL_HOURS", "24"))
+    malware_full_scan_root: str = os.getenv("MALWARE_FULL_SCAN_ROOT", "")  # vacío = usa fs_allowed_root
+
+    # Carpetas de riesgo típico para el escaneo "on-access" (YARA+ClamAV sobre
+    # cada archivo nuevo apenas aparece, vía watchdog) -- coma-separado.
+    # Default: Descargas/Escritorio/Temp del usuario actual.
+    malware_watch_folders: str = os.getenv(
+        "MALWARE_WATCH_FOLDERS",
+        ",".join([
+            str(Path.home() / "Downloads"),
+            str(Path.home() / "Desktop"),
+            os.getenv("TEMP", str(Path.home() / "AppData" / "Local" / "Temp")),
+        ]),
+    )
+
+    # Credenciales generadas por Jarvis al completar formularios/registros web
+    # (ver app/tools/web_forms.py + app/forms/credential_store.py) -- cifradas
+    # con DPAPI, mismo mecanismo que investigation_keys_dir de arriba (ver ese
+    # módulo para el razonamiento completo). Decisión de la ronda de
+    # preguntas de "formularios web" 2026-08-16: Damian pidió guardarlas en
+    # un archivo (no solo mostrarlas una vez en el chat) -- texto plano fue
+    # descartado a propósito, mismo antipatrón ya señalado sobre .env.
+    form_credentials_path: str = os.getenv(
+        "FORM_CREDENTIALS_PATH", str(Path(__file__).resolve().parent.parent / "data" / "form_credentials.dpapi")
+    )
+
+    # Capturas de pantalla del dry-run de browser_preview_submit (ver
+    # app/tools/web_forms.py) -- previsualización real de qué se va a enviar
+    # ANTES de tocar el botón de submit, pedido explícito de Damian (sin
+    # excepción, ni para formularios simples de un par de campos).
+    form_preview_dir: str = os.getenv(
+        "FORM_PREVIEW_DIR", str(Path(__file__).resolve().parent.parent / "data" / "form_previews")
+    )
+
+    # Grabación de pantalla real (ffmpeg, ver app/recording.py) -- se activa
+    # sola alrededor de cualquier tool de la familia auditoría/fix/test (ver
+    # app/tools/__init__.py::_RECORDABLE_TOOL_NAMES) para documentar el
+    # trabajo de Jarvis de punta a punta con contenido real, pedido explícito
+    # de Damian 2026-08-13. Tan sensible en privacidad como
+    # DESKTOP_CONTROL_ENABLED (graba TODO el escritorio, no solo la ventana
+    # relevante -- cualquier otra cosa visible en pantalla en ese momento
+    # queda en el video) -- prendida por default porque ESE es el punto de la
+    # feature (capturar sin que Damian tenga que acordarse de arrancarla a
+    # mano cada vez), pero con un apagador real y efectivo por si en algún
+    # momento hay algo en pantalla que no debería quedar grabado.
+    screen_recording_enabled: bool = _bool(os.getenv("SCREEN_RECORDING_ENABLED"), True)
+
+    # Carpeta de salida de las grabaciones -- a propósito en la RAÍZ del repo
+    # (content/recordings/, hermana de backend/, no adentro de backend/):
+    # esto es contenido humano/de publicación (mismo criterio que
+    # Fundamentos_de_Jarvis.docx, que también vive en la raíz), no un dato
+    # operativo del backend como investigation_cases_dir o selfrepair_dir.
+    recording_output_dir: str = os.getenv(
+        "RECORDING_OUTPUT_DIR", str(Path(__file__).resolve().parent.parent.parent / "content" / "recordings")
+    )
+
 
 settings = Settings()
 

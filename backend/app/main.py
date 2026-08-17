@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -9,6 +10,7 @@ from .auth import verify_api_key
 from .config import settings
 from .llm_client import client
 from .logging_config import configure_logging
+from .malware import behavioral_watcher, fullscan
 from .models import ChatRequest, ChatResponse, ToolCallLog
 from .network_info import network_candidates
 from .phone_link import handle_incoming, is_phone_connected, register_phone, unregister_phone
@@ -23,6 +25,18 @@ app = FastAPI(title="Jarvis Remote Backend", version="0.1.0")
 app.include_router(codebase_router)
 app.include_router(obsidian_router)
 app.include_router(investigation_router)
+
+
+@app.on_event("startup")
+async def _start_malware_protection() -> None:
+    """Arranca los dos servicios en background del centinela de malware (ver
+    app/malware/, spec 2026-08-16) -- no bloquean el arranque del server: el
+    escaneo on-access corre en su propio thread (Observer de watchdog,
+    síncrono por diseño de esa librería), y el escaneo completo diario es
+    una tarea asyncio que arranca, espera su delay inicial, y se repite sola
+    sin intervención de este handler de nuevo."""
+    behavioral_watcher.start_watching()
+    asyncio.create_task(fullscan.full_scan_loop())
 
 
 @app.get("/api/health")

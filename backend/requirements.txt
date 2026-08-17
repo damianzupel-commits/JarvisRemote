@@ -93,3 +93,18 @@ pyyaml>=6.0
 # necesitando Npcap instalado a mano (mismo click de UAC que nmap, es una
 # limitación de Windows, no de esta librería).
 scapy>=2.7
+# Módulo de protección contra malware (ver app/malware/, spec de Damian
+# 2026-08-16). yara-python: wheel con libyara embebida, sin instalación
+# aparte (mismo criterio que cppcheck/clang-tidy más arriba) -- motor de
+# reglas de firmas + heurística propia, corre 100% local. psutil: vigilancia
+# del proceso propio (auto-protección parte B) y de procesos del sistema en
+# general. watchdog: escaneo "on-access" (carpetas de riesgo) y la heurística
+# conductual de ransomware (mass rename + entropía), ambos por eventos de
+# filesystem en tiempo real en vez de polling. clamd (no clamav -- el nombre
+# del paquete real en PyPI, wrapper puro sin binario) habla el protocolo del
+# daemon clamd de ClamAV -- ClamAV en sí (el motor + la base de firmas) se
+# instala aparte, manual (ver backend/README.md), esto solo es el cliente.
+yara-python>=4.5
+psutil>=6.0
+watchdog>=5.0
+clamd>=1.0.2

@@ -48,7 +48,15 @@ _BLOCKING_MODULES = ("app.tools.desktop",)
 # `dispatch_to_phone`): meter el MÓDULO entero acá rompería
 # `phone_nmap_scan` -- `asyncio.to_thread` sobre una función async
 # devuelve la corrutina sin ejecutarla, nunca corre de verdad.
-_BLOCKING_TOOL_NAMES = frozenset({"nmap_scan", "sqlmap_scan", "packet_capture_scan", "packet_capture_analyze", "zap_scan"})
+_BLOCKING_TOOL_NAMES = frozenset({
+    "nmap_scan", "sqlmap_scan", "packet_capture_scan", "packet_capture_analyze", "zap_scan",
+    # Centinela de malware (ver app/malware/, spec 2026-08-16) -- escaneo de
+    # carpetas/disco completo (I/O real sobre potencialmente miles de
+    # archivos) y el recorrido recursivo de FIM sobre app/ entero, mismo
+    # motivo que nmap_scan/sqlmap_scan de arriba: sin esto, cualquiera de
+    # estas tools bloquearía el event loop del server entero mientras corre.
+    "malware_scan_path", "malware_full_scan_run", "malware_check_integrity", "malware_rebuild_integrity_baseline",
+})
 
 # Grabación automática de pantalla (ver app/recording.py) alrededor del
 # pipeline real de auditoría->fix->test -- pedido explícito de Damian
@@ -207,6 +215,7 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> Any:
 # Importar los módulos de tools para que se registren solos.
 from . import filesystem  # noqa: E402,F401
 from . import browser  # noqa: E402,F401
+from . import web_forms  # noqa: E402,F401
 from . import desktop  # noqa: E402,F401
 from . import pc_command  # noqa: E402,F401
 from . import phone  # noqa: E402,F401
@@ -221,11 +230,14 @@ from . import selfrepair  # noqa: E402,F401
 from . import audit_report  # noqa: E402,F401
 from . import network_scan  # noqa: E402,F401
 from . import research  # noqa: E402,F401
+from . import opencode  # noqa: E402,F401
+from . import cloud_expert  # noqa: E402,F401
 from . import investigation  # noqa: E402,F401
+from . import recording  # noqa: E402,F401
 from . import pentest_sqlmap  # noqa: E402,F401
 from . import pentest_wireshark  # noqa: E402,F401
 from . import pentest_zap  # noqa: E402,F401
-from . import recording  # noqa: E402,F401
+from . import malware  # noqa: E402,F401
 
 # generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
 # propósito, no importadas -- no es un problema de estilo, es una precaución
