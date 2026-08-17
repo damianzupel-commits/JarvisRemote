@@ -46,8 +46,17 @@ def log_tool_call(
     arguments: dict[str, Any],
     result: Any = None,
     error: str | None = None,
+    conversation_id: str | None = None,
 ) -> None:
-    """Registra un tool call de `target` ("phone" o "desktop") como una línea JSON.
+    """Registra un tool call de `target` ("phone", "desktop", "fs", o "agent" --
+    ver `agent.py::run_agent`, que loguea acá TODO tool call del loop general,
+    bloqueado o no) como una línea JSON.
+
+    `conversation_id` es opcional (solo lo manda `run_agent`, que sí conoce la
+    conversación) -- pensado para que `app/introspection/analyzer.py` pueda
+    agrupar los tool calls de una misma sesión y detectar patrones de falla
+    que solo tienen sentido dentro de una conversación (ej. un archivo
+    bloqueado que nunca se reintenta DENTRO de esa misma sesión).
 
     Nunca lanza: un fallo de auditoría (ej. algo no serializable) no debe romper
     la tool call real — en el peor caso se pierde esa línea de auditoría, se
@@ -60,6 +69,8 @@ def log_tool_call(
         "arguments": arguments,
         "ok": error is None,
     }
+    if conversation_id is not None:
+        entry["conversation_id"] = conversation_id
     if error is not None:
         entry["error"] = error
     else:
@@ -72,12 +83,16 @@ def log_tool_call(
         )
 
 
-def read_entries(target: str | None = None, tool: str | None = None) -> list[dict]:
+def read_entries(
+    target: str | None = None, tool: str | None = None, conversation_id: str | None = None
+) -> list[dict]:
     """Lee de vuelta las entradas ya loggeadas (solo el archivo actual, no los
-    rotados `.1`/`.2`/...), opcionalmente filtradas por target/tool -- usado
-    por `audit_report.generate_report` para saber qué fixes/ediciones ya se
-    aplicaron de verdad a un proyecto. Tolera líneas corruptas (las salta): un
-    log parcialmente dañado no debe romper a quien lo esté leyendo."""
+    rotados `.1`/`.2`/...), opcionalmente filtradas por target/tool/conversation_id
+    -- usado por `audit_report.generate_report` para saber qué fixes/ediciones ya
+    se aplicaron de verdad a un proyecto, y por `app/introspection/analyzer.py`
+    para reconstruir la secuencia de tool calls de una sesión puntual. Tolera
+    líneas corruptas (las salta): un log parcialmente dañado no debe romper a
+    quien lo esté leyendo."""
     if not _AUDIT_LOG_PATH.is_file():
         return []
     entries = []
@@ -92,6 +107,8 @@ def read_entries(target: str | None = None, tool: str | None = None) -> list[dic
         if target is not None and entry.get("target") != target:
             continue
         if tool is not None and entry.get("tool") != tool:
+            continue
+        if conversation_id is not None and entry.get("conversation_id") != conversation_id:
             continue
         entries.append(entry)
     return entries

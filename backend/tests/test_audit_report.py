@@ -12,6 +12,8 @@ from app.findings.models import Finding, ScanResult
 from app.obsidian import vault
 from app.quality import store as quality_store
 from app.security import store as security_store
+from app.testing import store as test_store
+from app.testing.models import RunOutcome
 
 
 @pytest.fixture(autouse=True)
@@ -19,6 +21,7 @@ def _tmp_dirs(tmp_path, monkeypatch):
     monkeypatch.setattr(security_store.settings, "security_scan_dir", str(tmp_path / "security_cache"))
     monkeypatch.setattr(quality_store.settings, "quality_scan_dir", str(tmp_path / "quality_cache"))
     monkeypatch.setattr(vault.settings, "obsidian_vault_path", str(tmp_path / "vault"))
+    monkeypatch.setattr(test_store.settings, "test_run_dir", str(tmp_path / "test_run_cache"))
 
 
 @pytest.fixture
@@ -124,3 +127,65 @@ def test_generate_report_excludes_known_noise_from_executive_summary(project):
     assert "B608" in note.content
     assert "B101" in note.content  # sigue en la tabla de detalle, no se borra
     assert "ruido conocido" in note.content
+
+
+def _save_test_run(project, **overrides) -> None:
+    defaults = dict(
+        root=str(project), ran_at=_now(), detected=True, command="python -m pytest",
+        language="Python", detect_reason="x", exit_code=0, passed=True, timed_out=False,
+        stdout="1 passed", stderr="", stdout_truncated=False, stderr_truncated=False,
+    )
+    defaults.update(overrides)
+    test_store.save_last_run(RunOutcome(**defaults))
+
+
+def test_generate_report_flags_that_tests_were_never_run(project):
+    """Gap principal identificado en el informe de estado 2026-08-10: el reporte
+    NUNCA debe poder leerse como "resuelto" sin decir si hubo (o no) una
+    verificación de tests real -- si nunca se corrió, el resumen ejecutivo lo
+    dice explícitamente en la primera línea, no lo omite en silencio."""
+    security_store.save_scan(ScanResult(root=str(project), scanned_at=_now(), tools_run=["bandit"], tools_skipped={}, findings=[]))
+
+    result = audit_report.generate_report(str(project))
+
+    assert result["tests"] is None
+    note = vault.read_note(result["note_id"])
+    summary = note.content.split("## Resumen ejecutivo")[1]
+    assert "Nunca se corrió una verificación de tests real" in summary
+
+
+def test_generate_report_flags_when_no_test_suite_was_detected(project):
+    security_store.save_scan(ScanResult(root=str(project), scanned_at=_now(), tools_run=["bandit"], tools_skipped={}, findings=[]))
+    _save_test_run(project, detected=False, command=None, language=None, detect_reason=None, exit_code=None, passed=False, stdout="")
+
+    result = audit_report.generate_report(str(project))
+
+    assert result["tests"]["detected"] is False
+    note = vault.read_note(result["note_id"])
+    summary = note.content.split("## Resumen ejecutivo")[1]
+    assert "No se detectó ninguna suite de tests real" in summary
+
+
+def test_generate_report_flags_a_green_test_run(project):
+    security_store.save_scan(ScanResult(root=str(project), scanned_at=_now(), tools_run=["bandit"], tools_skipped={}, findings=[]))
+    _save_test_run(project, passed=True, command="python -m pytest")
+
+    result = audit_report.generate_report(str(project))
+
+    assert result["tests"]["passed"] is True
+    note = vault.read_note(result["note_id"])
+    summary = note.content.split("## Resumen ejecutivo")[1]
+    assert "EN VERDE" in summary
+
+
+def test_generate_report_prominently_flags_a_failed_test_run(project):
+    security_store.save_scan(ScanResult(root=str(project), scanned_at=_now(), tools_run=["bandit"], tools_skipped={}, findings=[]))
+    _save_test_run(project, passed=False, exit_code=1, command="python -m pytest", stdout="1 failed")
+
+    result = audit_report.generate_report(str(project))
+
+    assert result["tests"]["passed"] is False
+    note = vault.read_note(result["note_id"])
+    summary = note.content.split("## Resumen ejecutivo")[1]
+    assert "FALLÓ" in summary
+    assert "no dar este proyecto por estable" in summary.lower()

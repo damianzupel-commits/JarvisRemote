@@ -1,6 +1,6 @@
 """Cache en disco del último escaneo de seguridad por proyecto -- mismo patrón
-que `app/codebase/store.py`. Necesario para que `security_apply_fix` pueda
-resolver un `finding_id` que el LLM vio en una respuesta anterior sin tener que
+que `app/codebase/store.py`. Necesario para que `security_get_finding`/`code_apply_fix`
+puedan resolver un `finding_id` que el LLM vio en una respuesta anterior sin tener que
 volver a correr los escáneres (Semgrep con `--config auto` tarda; no tiene
 sentido repetirlo solo para mirar un hallazgo puntual).
 
@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 
 from ..config import settings
+from ..findings.models import candidate_lines, resolve_finding
 from .models import Finding, ScanResult
 
 
@@ -45,8 +46,26 @@ def load_scan(root: str | Path) -> ScanResult | None:
     return ScanResult.from_dict(data)
 
 
-def find_finding(root: str | Path, finding_id: str) -> Finding | None:
+def find_finding(
+    root: str | Path,
+    finding_id: str | None = None,
+    file: str | None = None,
+    rule_id: str | None = None,
+    line: int | None = None,
+) -> Finding | None:
+    """Ver `resolve_finding` (app/findings/models.py) para el criterio real de
+    búsqueda -- `finding_id` exacto primero, `file`+`rule_id`(+`line`) como
+    fallback (más robusto para el LLM que un hash de memoria)."""
     result = load_scan(root)
     if result is None:
         return None
-    return next((f for f in result.findings if f.id == finding_id), None)
+    return resolve_finding(result.findings, finding_id=finding_id, file=file, rule_id=rule_id, line=line)
+
+
+def find_candidate_lines(root: str | Path, file: str, rule_id: str) -> list[int]:
+    """Ver `candidate_lines` (app/findings/models.py) -- líneas reales para un
+    mensaje de error accionable cuando `find_finding` no resuelve nada."""
+    result = load_scan(root)
+    if result is None:
+        return []
+    return candidate_lines(result.findings, file=file, rule_id=rule_id)

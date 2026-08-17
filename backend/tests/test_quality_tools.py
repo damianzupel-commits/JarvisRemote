@@ -102,3 +102,81 @@ def test_quality_get_finding_returns_code_context(project, monkeypatch):
 def test_quality_get_finding_raises_for_unknown_id(project):
     with pytest.raises(ValueError):
         quality_scan.quality_get_finding(str(project), "no-existe")
+
+
+def test_quality_get_finding_by_file_and_rule_id(project, monkeypatch):
+    # Mismo criterio que security_get_finding: identificar por file+rule_id
+    # en vez de depender de que el finding_id (hash interno) se cite bien.
+    finding = Finding(id="xyz", tool="ruff", file="app.py", line=1, end_line=1, severity="low", rule_id="F401", message="unused import")
+    _no_scanners(monkeypatch)
+    monkeypatch.setattr(scanners, "run_ruff", lambda root, python_files: [finding])
+
+    quality_scan.quality_scan_project(str(project))
+    result = quality_scan.quality_get_finding(str(project), file="app.py", rule_id="F401")
+
+    assert result["finding"]["id"] == "xyz"
+
+
+def test_quality_get_finding_disambiguates_with_line(project, monkeypatch):
+    (project / "app.py").write_text("\n".join(f"line{i}" for i in range(1, 20)) + "\n", encoding="utf-8")
+    f1 = Finding(id="f1", tool="ruff", file="app.py", line=1, end_line=1, severity="low", rule_id="F401", message="unused 1")
+    f2 = Finding(id="f2", tool="ruff", file="app.py", line=10, end_line=10, severity="low", rule_id="F401", message="unused 2")
+    _no_scanners(monkeypatch)
+    monkeypatch.setattr(scanners, "run_ruff", lambda root, python_files: [f1, f2])
+
+    quality_scan.quality_scan_project(str(project))
+
+    with pytest.raises(ValueError):
+        quality_scan.quality_get_finding(str(project), file="app.py", rule_id="F401")
+
+    result = quality_scan.quality_get_finding(str(project), file="app.py", rule_id="F401", line=10)
+    assert result["finding"]["id"] == "f2"
+
+
+def test_quality_get_finding_error_lists_real_candidate_lines(project, monkeypatch):
+    f1 = Finding(id="f1", tool="ruff", file="app.py", line=1, end_line=1, severity="low", rule_id="F401", message="unused 1")
+    f2 = Finding(id="f2", tool="ruff", file="app.py", line=10, end_line=10, severity="low", rule_id="F401", message="unused 2")
+    _no_scanners(monkeypatch)
+    monkeypatch.setattr(scanners, "run_ruff", lambda root, python_files: [f1, f2])
+    quality_scan.quality_scan_project(str(project))
+
+    with pytest.raises(ValueError, match=r"1.*10|10.*1"):
+        quality_scan.quality_get_finding(str(project), file="app.py", rule_id="F401", line=99)
+
+
+def test_quality_get_finding_tolerates_wrong_line_when_unambiguous(project, monkeypatch):
+    finding = Finding(id="xyz", tool="ruff", file="app.py", line=5, end_line=5, severity="low", rule_id="F401", message="unused import")
+    _no_scanners(monkeypatch)
+    monkeypatch.setattr(scanners, "run_ruff", lambda root, python_files: [finding])
+    quality_scan.quality_scan_project(str(project))
+
+    result = quality_scan.quality_get_finding(str(project), file="app.py", rule_id="F401", line=1)
+    assert result["finding"]["id"] == "xyz"
+
+
+def test_quality_scan_project_file_filter_returns_only_that_files_findings(project, monkeypatch):
+    findings = [
+        Finding(id="a", tool="ruff", file="views.py", line=5, end_line=5, severity="low", rule_id="F401", message="unused import"),
+        Finding(id="b", tool="mypy", file="other.py", line=1, end_line=1, severity="high", rule_id="arg-type", message="type error"),
+    ]
+    _no_scanners(monkeypatch)
+    monkeypatch.setattr(scanners, "run_ruff", lambda root, python_files: findings[:1])
+    monkeypatch.setattr(scanners, "run_mypy", lambda root, python_files: findings[1:])
+
+    result = quality_scan.quality_scan_project(str(project), file="views.py")
+
+    assert result["file"] == "views.py"
+    assert [f["id"] for f in result["findings"]] == ["a"]
+    assert result["findings_omitted"] == 0
+    assert result["total_findings"] == 2
+
+
+def test_quality_scan_project_file_filter_normalizes_windows_separators(project, monkeypatch):
+    finding = Finding(id="a", tool="ruff", file="pkg/views.py", line=5, end_line=5, severity="low", rule_id="F401", message="unused import")
+    _no_scanners(monkeypatch)
+    monkeypatch.setattr(scanners, "run_ruff", lambda root, python_files: [finding])
+
+    result = quality_scan.quality_scan_project(str(project), file="pkg\\views.py")
+
+    assert result["file"] == "pkg/views.py"
+    assert [f["id"] for f in result["findings"]] == ["a"]

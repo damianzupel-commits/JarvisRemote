@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 
 from ..config import settings
-from ..findings.models import Finding, ScanResult
+from ..findings.models import Finding, ScanResult, candidate_lines, resolve_finding
 
 
 def _slug_for(root: Path) -> str:
@@ -44,8 +44,26 @@ def load_scan(root: str | Path) -> ScanResult | None:
     return ScanResult.from_dict(data)
 
 
-def find_finding(root: str | Path, finding_id: str) -> Finding | None:
+def find_finding(
+    root: str | Path,
+    finding_id: str | None = None,
+    file: str | None = None,
+    rule_id: str | None = None,
+    line: int | None = None,
+) -> Finding | None:
+    """Ver `resolve_finding` (app/findings/models.py) para el criterio real de
+    búsqueda -- `finding_id` exacto primero, `file`+`rule_id`(+`line`) como
+    fallback (más robusto para el LLM que un hash de memoria)."""
     result = load_scan(root)
     if result is None:
         return None
-    return next((f for f in result.findings if f.id == finding_id), None)
+    return resolve_finding(result.findings, finding_id=finding_id, file=file, rule_id=rule_id, line=line)
+
+
+def find_candidate_lines(root: str | Path, file: str, rule_id: str) -> list[int]:
+    """Ver `candidate_lines` (app/findings/models.py) -- líneas reales para un
+    mensaje de error accionable cuando `find_finding` no resuelve nada."""
+    result = load_scan(root)
+    if result is None:
+        return []
+    return candidate_lines(result.findings, file=file, rule_id=rule_id)

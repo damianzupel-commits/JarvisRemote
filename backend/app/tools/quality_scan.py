@@ -23,6 +23,26 @@ from . import register_tool
 _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
+def _finding_not_found_error(path: str, file: str | None, rule_id: str | None, line: int | None) -> str:
+    """Ver la misma función en app/tools/security_scan.py -- mensaje de error
+    ACCIONABLE que lista las líneas reales disponibles para (file, rule_id)
+    en vez del genérico "puede haber más de uno, agregá line"."""
+    if file and rule_id:
+        lines = store.find_candidate_lines(path, file, rule_id)
+        if lines:
+            return (
+                f"No hay un hallazgo con rule_id='{rule_id}' en '{file}'"
+                + (f" en la línea {line}" if line is not None else "")
+                + f" -- SÍ hay hallazgos con esa regla en ese archivo en la(s) línea(s): {lines}. "
+                "Reintentá con 'line' igual a una de esas."
+            )
+    return (
+        f"No se encontró ese hallazgo en '{path}' -- ¿corriste quality_scan_project sobre este proyecto? "
+        "Si pasaste 'file'+'rule_id', puede haber más de un hallazgo con esa regla en ese archivo, o ninguno: "
+        "corré quality_scan_project(file=...) para ver los hallazgos reales de ese archivo."
+    )
+
+
 @register_tool(
     name="quality_scan_project",
     description=(
@@ -32,7 +52,11 @@ _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
         "indefinidos, errores de tipo, variables sin usar, patrones propensos a bugs) -- NO vulnerabilidades "
         "de seguridad, esas las cubre security_scan_project. Devuelve hallazgos reales con severidad, archivo, "
         "línea y regla -- NO son inventados por el modelo. Usa cache salvo refresh=true. Cada hallazgo tiene un "
-        "'id' estable para pasarle a code_apply_fix."
+        "'id' estable para pasarle a code_apply_fix. El resumen sin 'file' viene ordenado por severidad y "
+        "recortado (cantidad y tamaño de mensaje) para no inundar el contexto en proyectos con muchos hallazgos "
+        "-- un hallazgo puntual de severidad media/baja puede quedar afuera aunque exista de verdad. Si ya "
+        "sabés en qué archivo buscar, pasá 'file' (ruta relativa a la raíz del proyecto) para traer TODOS los "
+        "hallazgos de ESE archivo sin el recorte del resumen global."
     ),
     parameters={
         "type": "object",
@@ -42,11 +66,19 @@ _SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
                 "type": "boolean",
                 "description": "Si es true, ignora el cache y vuelve a correr todos los analizadores. Default false.",
             },
+            "file": {
+                "type": "string",
+                "description": (
+                    "Opcional: ruta relativa (a 'path') de un archivo puntual. Si se pasa, devuelve TODOS los "
+                    "hallazgos de ese archivo (sin el recorte por cantidad/severidad del resumen global) en vez "
+                    "del resumen de todo el proyecto."
+                ),
+            },
         },
         "required": ["path"],
     },
 )
-def quality_scan_project(path: str, refresh: bool = False) -> dict:
+def quality_scan_project(path: str, refresh: bool = False, file: str | None = None) -> dict:
     result = scan_project(path, refresh=refresh)
     findings_sorted = sorted(result.findings, key=lambda f: (_SEVERITY_ORDER.get(f.severity, 9), f.file, f.line))
 
@@ -54,39 +86,63 @@ def quality_scan_project(path: str, refresh: bool = False) -> dict:
     for f in result.findings:
         by_severity[f.severity] = by_severity.get(f.severity, 0) + 1
 
-    return {
+    response = {
         "root": result.root,
         "scanned_at": result.scanned_at,
         "tools_run": result.tools_run,
         "tools_skipped": result.tools_skipped,
         "total_findings": len(result.findings),
         "findings_by_severity": by_severity,
-        "findings": [f.to_dict() for f in findings_sorted[:100]],
-        "findings_omitted": max(0, len(findings_sorted) - 100),
     }
+
+    if file is not None:
+        normalized = file.replace("\\", "/").lstrip("/")
+        file_findings = [f for f in findings_sorted if f.file == normalized]
+        response["file"] = normalized
+        response["findings"] = [f.to_dict() for f in file_findings]
+        response["findings_omitted"] = 0
+        return response
+
+    response["findings"] = [f.to_dict() for f in findings_sorted[:100]]
+    response["findings_omitted"] = max(0, len(findings_sorted) - 100)
+    return response
 
 
 @register_tool(
     name="quality_get_finding",
     description=(
-        "Trae el detalle completo de un hallazgo de calidad puntual (por su 'id', obtenido de "
-        "quality_scan_project) junto con el código real alrededor de la línea afectada -- usar antes de "
-        "proponer un fix con code_apply_fix, para ver el contexto exacto del código a modificar."
+        "Trae el detalle completo de un hallazgo de calidad puntual junto con el código real alrededor de la "
+        "línea afectada -- usar antes de proponer un fix con code_apply_fix, para ver el contexto exacto del "
+        "código a modificar. Identificá el hallazgo por 'finding_id' (tal como lo devolvió quality_scan_project) "
+        "O por 'file'+'rule_id' (y 'line' si hay más de un hallazgo con esa regla en ese archivo) -- preferí "
+        "esta segunda forma: 'finding_id' es un hash interno fácil de citar mal de memoria entre un tool call "
+        "y el siguiente, mientras que file/rule_id/line son texto que ya viste tal cual en el resultado de "
+        "quality_scan_project."
     ),
     parameters={
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Ruta absoluta a la raíz del proyecto (ya escaneado)."},
             "finding_id": {"type": "string", "description": "Id del hallazgo, tal como lo devolvió quality_scan_project."},
+            "file": {"type": "string", "description": "Ruta del archivo (relativa a 'path') -- alternativa a finding_id, junto con rule_id."},
+            "rule_id": {"type": "string", "description": "Regla del hallazgo (ej. 'F401') -- junto con 'file', alternativa a finding_id."},
+            "line": {"type": "integer", "description": "Línea del hallazgo -- necesario si hay más de uno con la misma regla en el archivo."},
             "context_lines": {"type": "integer", "description": "Líneas de contexto antes/después a incluir (default 5)."},
         },
-        "required": ["path", "finding_id"],
+        "required": ["path"],
     },
 )
-def quality_get_finding(path: str, finding_id: str, context_lines: int = 5) -> dict:
-    finding = store.find_finding(path, finding_id)
+def quality_get_finding(
+    path: str,
+    finding_id: str | None = None,
+    file: str | None = None,
+    rule_id: str | None = None,
+    line: int | None = None,
+    context_lines: int = 5,
+) -> dict:
+    finding = store.find_finding(path, finding_id=finding_id, file=file, rule_id=rule_id, line=line)
     if finding is None:
-        raise ValueError(f"No se encontró el hallazgo '{finding_id}' -- ¿corriste quality_scan_project sobre '{path}'?")
+        raise ValueError(_finding_not_found_error(path, file, rule_id, line))
 
     root = Path(path).resolve()
     file_path = root / finding.file

@@ -24,6 +24,7 @@ from .findings.noise import split_noise as _split_noise
 from .obsidian import vault
 from .quality import store as quality_store
 from .security import store as security_store
+from .testing import store as test_store
 
 _MAX_FINDINGS_PER_SECTION = 200
 
@@ -75,6 +76,37 @@ def _findings_table(title: str, findings: list[Finding]) -> list[str]:
     return lines
 
 
+def _test_status_line(root: Path) -> str:
+    """Línea de estado de la última corrida de tests real (`code_run_tests` /
+    el paso automático dentro de `security_audit_find_fix_verify`) -- agregada
+    2026-08-10 para que el reporte NUNCA pueda leerse como "todo resuelto" sin
+    decir explícitamente si hubo (o no) una verificación funcional real de por
+    medio, no solo análisis estático. A propósito no bloquea/lanza excepción
+    si nunca se corrió: muchos proyectos auditados acá (ej. apps
+    deliberadamente vulnerables tipo pygoat/NodeGoat, usadas para probar el
+    pipeline de seguridad) no tienen ninguna suite de tests real, y eso no
+    debería impedir generar el resto del reporte -- solo se marca en voz alta
+    en vez de omitirse en silencio."""
+    last_run = test_store.load_last_run(root)
+    if last_run is None:
+        return (
+            "⚠ Nunca se corrió una verificación de tests real sobre este proyecto (code_run_tests) -- "
+            "los hallazgos de este reporte están basados solo en análisis estático, no en que el "
+            "proyecto siga funcionando de verdad."
+        )
+    if not last_run.detected:
+        return (
+            f"ℹ No se detectó ninguna suite de tests real en este proyecto (última verificación: "
+            f"{last_run.ran_at}) -- no es una falla, simplemente no hay nada que correr."
+        )
+    if last_run.passed:
+        return f"✓ Última corrida de tests real: EN VERDE ({last_run.ran_at}, comando: `{last_run.command}`)."
+    return (
+        f"✗ Última corrida de tests real: FALLÓ ({last_run.ran_at}, comando: `{last_run.command}`, "
+        f"exit_code={last_run.exit_code}) -- no dar este proyecto por estable hasta corregir esto."
+    )
+
+
 def generate_report(path: str) -> dict:
     root = Path(path).resolve()
     if not root.is_dir():
@@ -124,6 +156,8 @@ def generate_report(path: str) -> dict:
     lines.append("")
 
     lines.append("## Resumen ejecutivo")
+    lines.append("")
+    lines.append(_test_status_line(root))
     lines.append("")
     total_open = len(sec_real) + len(qual_real)
     total_noise = len(sec_noise) + len(qual_noise)
@@ -207,6 +241,8 @@ def generate_report(path: str) -> dict:
         tags=["reportes", "auditoria", "seguridad", "calidad"],
     )
 
+    last_test_run = test_store.load_last_run(root)
+
     return {
         "note_id": note.id,
         "note_title": note.title,
@@ -215,5 +251,6 @@ def generate_report(path: str) -> dict:
         "quality_findings": len(qual_findings),
         "fixes_applied": len(fix_entries),
         "general_edits_applied": len(edit_entries),
+        "tests": last_test_run.to_dict() if last_test_run else None,
         "content_preview": content[:2000],
     }
