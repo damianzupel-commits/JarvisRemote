@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from app import shell_exec
 from app.tools import pc_command
 
 
@@ -90,13 +91,13 @@ def test_pc_run_command_clamps_timeout_to_hard_max(monkeypatch):
     # que de verdad espera al comando; la eventual segunda llamada, si el
     # proceso ya murió, es solo para drenar los pipes y no nos importa acá).
     captured_timeouts = []
-    real_communicate = pc_command.subprocess.Popen.communicate
+    real_communicate = shell_exec.subprocess.Popen.communicate
 
     def _fake_communicate(self, timeout=None, **kwargs):
         captured_timeouts.append(timeout)
         return real_communicate(self, **kwargs)
 
-    monkeypatch.setattr(pc_command.subprocess.Popen, "communicate", _fake_communicate)
+    monkeypatch.setattr(shell_exec.subprocess.Popen, "communicate", _fake_communicate)
 
     pc_command.pc_run_command("echo clamp_test", cwd=".", timeout=999999)
 
@@ -104,7 +105,7 @@ def test_pc_run_command_clamps_timeout_to_hard_max(monkeypatch):
 
 
 def test_pc_run_command_truncates_large_output(monkeypatch):
-    monkeypatch.setattr(pc_command, "_MAX_OUTPUT_CHARS", 10)
+    monkeypatch.setattr(shell_exec, "MAX_OUTPUT_CHARS", 10)
 
     result = pc_command.pc_run_command("echo 0123456789ABCDEF", cwd=".", timeout=15)
 

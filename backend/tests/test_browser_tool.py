@@ -21,6 +21,7 @@ class _FakePage:
     def __init__(self):
         self.closed = False
         self.url = "https://example.com"
+        self.select_option_calls: list[dict] = []
 
     def is_closed(self):
         return self.closed
@@ -30,6 +31,14 @@ class _FakePage:
 
     async def goto(self, url, wait_until=None):
         self.url = url
+
+    async def select_option(self, selector, value=None, label=None, timeout=None):
+        self.select_option_calls.append({"selector": selector, "value": value, "label": label})
+        if value == "no-existe" and label is None:
+            from playwright.async_api import Error as PlaywrightError
+
+            raise PlaywrightError("no matching option")
+        return [value or label]
 
 
 class _FakeContext:
@@ -130,6 +139,34 @@ async def test_browser_open_navigates_and_returns_url_and_title(monkeypatch):
     result = await browser.browser_open(url="https://www.youtube.com")
 
     assert result == {"url": "https://www.youtube.com", "title": "Example"}
+
+
+@pytest.mark.anyio
+async def test_browser_select_option_by_value(monkeypatch):
+    fake_pw = _FakePlaywright()
+    browser._playwright = fake_pw
+    browser._browser = _FakeBrowser(fake_pw.chromium._page)
+    browser._page = fake_pw.chromium._page
+
+    result = await browser.browser_select_option(selector="select[name='role']", value="Hobbyist/Personal Use")
+
+    assert result == {"selector": "select[name='role']", "selected": ["Hobbyist/Personal Use"]}
+    assert fake_pw.chromium._page.select_option_calls == [
+        {"selector": "select[name='role']", "value": "Hobbyist/Personal Use", "label": None}
+    ]
+
+
+@pytest.mark.anyio
+async def test_browser_select_option_falls_back_to_label_when_value_does_not_match(monkeypatch):
+    fake_pw = _FakePlaywright()
+    browser._playwright = fake_pw
+    browser._browser = _FakeBrowser(fake_pw.chromium._page)
+    browser._page = fake_pw.chromium._page
+
+    result = await browser.browser_select_option(selector="select[name='role']", value="no-existe")
+
+    assert result == {"selector": "select[name='role']", "selected": ["no-existe"]}
+    assert len(fake_pw.chromium._page.select_option_calls) == 2  # primero por value (falló), después por label
 
 
 @pytest.mark.anyio

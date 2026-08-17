@@ -8,6 +8,7 @@ open -> click -> get_text -> ... en varios turnos sin perder el estado de la pá
 from typing import Optional
 
 from playwright.async_api import Browser, Page, Playwright, async_playwright
+from playwright.async_api import Error as PlaywrightError
 
 from ..config import settings
 from . import register_tool
@@ -94,6 +95,34 @@ async def browser_type(selector: str, text: str, submit: bool = False) -> dict:
     if submit:
         await page.press(selector, "Enter")
     return {"selector": selector, "submitted": submit}
+
+
+@register_tool(
+    name="browser_select_option",
+    description=(
+        "Selecciona una opción de un elemento <select> (dropdown nativo de HTML) -- browser_type no sirve "
+        "para esto, 'fill' no aplica a un <select>. Encontrado como gap real completando el registro de "
+        "Nessus Essentials (2026-08-16): ese formulario pide un rol de una lista desplegable."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "selector": {"type": "string", "description": "Selector CSS del <select>."},
+            "value": {
+                "type": "string",
+                "description": "Value interno de la opción a elegir; si no matchea ninguno, se reintenta por el texto visible (label) de la opción.",
+            },
+        },
+        "required": ["selector", "value"],
+    },
+)
+async def browser_select_option(selector: str, value: str) -> dict:
+    page = await _ensure_page()
+    try:
+        selected = await page.select_option(selector, value=value, timeout=5000)
+    except PlaywrightError:
+        selected = await page.select_option(selector, label=value, timeout=5000)
+    return {"selector": selector, "selected": selected}
 
 
 @register_tool(

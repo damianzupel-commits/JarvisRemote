@@ -24,28 +24,17 @@ para no tener dos implementaciones del mismo boundary que puedan divergir.
 
 import logging
 import re
-import subprocess
-import sys
 
 from .. import audit_log
 from ..config import settings
+from ..shell_exec import MAX_TIMEOUT_SECONDS as _MAX_TIMEOUT_SECONDS
+from ..shell_exec import run_shell_command
 from . import register_tool
 from .filesystem import _resolve
 
 logger = logging.getLogger("jarvis.pc_shell")
 
-# Tope duro de timeout, sin importar lo que pida el LLM -- evita que un
-# comando lento (o un timeout mal elegido) cuelgue el turno de chat
-# indefinidamente. 600s (10 min) alcanza para instalar dependencias pesadas o
-# correr una suite de tests grande sin dejar la puerta abierta a un comando
-# que nunca termine.
-_MAX_TIMEOUT_SECONDS = 600.0
 _DEFAULT_TIMEOUT_SECONDS = 120.0
-
-# Cuánto de stdout/stderr devolver como máximo -- un comando con salida
-# gigante (ej. un build verboso) no debe inflar el historial de chat sin
-# límite, mismo criterio que `fs_read_file(max_chars=...)`.
-_MAX_OUTPUT_CHARS = 20000
 
 
 class PcShellDisabled(RuntimeError):
@@ -105,35 +94,6 @@ def _check_command_blocklist(command: str) -> None:
                 "Es una mitigación de 'evitar el desastre obvio' por matching de texto, "
                 "no un sandbox real -- si de verdad hace falta correr esto, hacelo a mano."
             )
-
-
-def _truncate(text: str) -> tuple[str, bool]:
-    if len(text) > _MAX_OUTPUT_CHARS:
-        return text[:_MAX_OUTPUT_CHARS], True
-    return text, False
-
-
-def _kill_process_tree(pid: int) -> None:
-    """Mata el proceso y todos sus hijos -- necesario en Windows porque un
-    comando corrido con shell=True (cmd.exe /c ...) puede spawnear
-    subprocesos (ej. pip instalando, pytest lanzando workers) que
-    proc.kill() por sí solo no toca, dejándolos huérfanos corriendo en
-    background después de que la tool ya reportó timeout."""
-    if sys.platform == "win32":
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    else:
-        import signal
-
-        try:
-            import os
-
-            os.killpg(os.getpgid(pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
 
 
 @register_tool(
@@ -198,41 +158,6 @@ def pc_run_command(command: str, cwd: str = ".", timeout: float = _DEFAULT_TIMEO
         audit_log.log_tool_call(target="pc", tool="pc_run_command", arguments=arguments, error=error)
         raise NotADirectoryError(error)
 
-    effective_timeout = min(float(timeout), _MAX_TIMEOUT_SECONDS)
-    logger.info("pc_shell: command=%r cwd=%s timeout=%s", command, work_dir, effective_timeout)
-
-    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
-    proc = subprocess.Popen(
-        command,
-        cwd=str(work_dir),
-        shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.DEVNULL,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        creationflags=creationflags,
-    )
-    timed_out = False
-    try:
-        stdout, stderr = proc.communicate(timeout=effective_timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_process_tree(proc.pid)
-        stdout, stderr = proc.communicate()
-
-    stdout, stdout_truncated = _truncate(stdout)
-    stderr, stderr_truncated = _truncate(stderr)
-    result = {
-        "command": command,
-        "cwd": str(work_dir),
-        "exit_code": proc.returncode,
-        "stdout": stdout,
-        "stderr": stderr,
-        "timed_out": timed_out,
-        "stdout_truncated": stdout_truncated,
-        "stderr_truncated": stderr_truncated,
-    }
+    result = run_shell_command(command, work_dir, timeout)
     audit_log.log_tool_call(target="pc", tool="pc_run_command", arguments=arguments, result=result)
     return result
