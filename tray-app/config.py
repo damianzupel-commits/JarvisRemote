@@ -13,6 +13,17 @@ HOST = os.getenv("HOST", "127.0.0.1")
 PORT = os.getenv("PORT", "8000")
 API_KEY = os.getenv("API_KEY", "")
 
+# Mismo env var que usa el backend para su propio presupuesto de espera al LLM
+# (`app/config.py::llm_request_timeout_seconds`, default 1800s) -- un turno de
+# chat puede incluir un tool lento (nmap_scan admite hasta 1200s) más una o más
+# idas y vueltas al LLM local, así que el timeout HTTP de este cliente tiene
+# que ser al menos tan largo como lo que el backend mismo está dispuesto a
+# esperar. Antes esto estaba hardcodeado en 600s acá y en voice_listener.py,
+# bug real confirmado 2026-08-15: con un modelo local lento (30B parcialmente
+# en CPU) el backend seguía trabajando de verdad bien pasados los 600s, pero
+# el cliente ya había mostrado un error de timeout y descartado la respuesta.
+CHAT_REQUEST_TIMEOUT_SECONDS = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "1800"))
+
 # Para pegarle al backend desde la tray, "0.0.0.0" (bind-all) no sirve como
 # destino: si el backend bindea ahi, igual hay que pegarle por localhost.
 _target_host = "127.0.0.1" if HOST in ("0.0.0.0", "") else HOST

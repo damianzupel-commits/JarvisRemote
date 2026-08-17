@@ -43,7 +43,7 @@ class ChatRequestThread(QThread):
                 config.CHAT_URL,
                 json={"message": self._message, "conversation_id": self._conversation_id},
                 headers={"Authorization": f"Bearer {config.API_KEY}"},
-                timeout=600,
+                timeout=config.CHAT_REQUEST_TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
             reply = resp.json().get("reply", "(sin respuesta)")
