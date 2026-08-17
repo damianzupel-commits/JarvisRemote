@@ -582,6 +582,17 @@ class Settings:
         "FORM_PREVIEW_DIR", str(Path(__file__).resolve().parent.parent / "data" / "form_previews")
     )
 
+    # TTL (segundos) del "preview token" de un solo uso que ata el dry-run de
+    # browser_preview_submit al submit real (ver app/tools/web_forms.py,
+    # 2026-08-17). El gate de consentimiento del envío de formularios dejó de
+    # depender SOLO del prompt del modelo: ahora el código exige que confirm=true
+    # traiga un token emitido por un dry-run reciente para ESE mismo
+    # submit_selector+página, no reusado y no vencido -- mismo espíritu que el
+    # proposal_id de selfrepair. TTL corto a propósito: la confirmación de Damian
+    # llega en el mismo intercambio de chat; si pasan minutos, es más seguro
+    # obligar a un dry-run nuevo (la página pudo cambiar debajo).
+    form_preview_token_ttl_seconds: int = int(os.getenv("FORM_PREVIEW_TOKEN_TTL_SECONDS", "300"))
+
     # Grabación de pantalla real (ffmpeg, ver app/recording.py) -- se activa
     # sola alrededor de cualquier tool de la familia auditoría/fix/test (ver
     # app/tools/__init__.py::_RECORDABLE_TOOL_NAMES) para documentar el

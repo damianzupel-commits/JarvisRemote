@@ -15,7 +15,11 @@ from app.tools import web_forms
 def _isolate_credentials_and_previews(tmp_path, monkeypatch):
     monkeypatch.setattr(web_forms.settings, "form_credentials_path", str(tmp_path / "creds.dpapi"))
     monkeypatch.setattr(web_forms.settings, "form_preview_dir", str(tmp_path / "previews"))
+    # El store de preview tokens es un dict a nivel módulo -- limpiarlo entre
+    # tests para que un token emitido en un test no habilite un submit en otro.
+    web_forms._preview_tokens.clear()
     yield
+    web_forms._preview_tokens.clear()
 
 
 class _FakePage:
@@ -116,16 +120,133 @@ async def test_browser_preview_submit_dry_run_never_clicks(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_browser_preview_submit_with_confirm_clicks_and_returns_after_screenshot(monkeypatch):
+async def test_browser_preview_submit_dry_run_returns_preview_token(monkeypatch):
+    page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
+    _patch_page(monkeypatch, page)
+
+    result = await web_forms.browser_preview_submit(submit_selector="#submit")
+
+    assert result["submitted"] is False
+    token = result["preview_token"]
+    assert token.startswith("pv-")
+    assert token in web_forms._preview_tokens
+    entry = web_forms._preview_tokens[token]
+    assert entry.submit_selector == "#submit"
+    assert entry.url == page.url
+    assert entry.used is False
+
+
+@pytest.mark.anyio
+async def test_browser_preview_submit_full_flow_dry_run_then_confirm_with_token(monkeypatch):
+    page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
+    _patch_page(monkeypatch, page)
+
+    dry_run = await web_forms.browser_preview_submit(submit_selector="#submit")
+    token = dry_run["preview_token"]
+
+    result = await web_forms.browser_preview_submit(
+        submit_selector="#submit", confirm=True, preview_token=token
+    )
+
+    assert result["submitted"] is True
+    assert page.click_calls == ["#submit"]
+    # 2 capturas: la del dry-run + la de después del submit.
+    assert len(page.screenshot_calls) == 2
+    assert page.wait_for_load_state_called is True
+
+
+@pytest.mark.anyio
+async def test_browser_preview_submit_confirm_without_token_is_rejected(monkeypatch):
     page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
     _patch_page(monkeypatch, page)
 
     result = await web_forms.browser_preview_submit(submit_selector="#submit", confirm=True)
 
-    assert result["submitted"] is True
+    assert result["submitted"] is False
+    assert "error" in result
+    assert page.click_calls == []  # NUNCA hizo click
+
+
+@pytest.mark.anyio
+async def test_browser_preview_submit_confirm_with_bogus_token_is_rejected(monkeypatch):
+    page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
+    _patch_page(monkeypatch, page)
+
+    result = await web_forms.browser_preview_submit(
+        submit_selector="#submit", confirm=True, preview_token="pv-deadbeef"
+    )
+
+    assert result["submitted"] is False
+    assert "error" in result
+    assert page.click_calls == []
+
+
+@pytest.mark.anyio
+async def test_browser_preview_submit_token_is_single_use(monkeypatch):
+    page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
+    _patch_page(monkeypatch, page)
+
+    token = (await web_forms.browser_preview_submit(submit_selector="#submit"))["preview_token"]
+
+    first = await web_forms.browser_preview_submit(submit_selector="#submit", confirm=True, preview_token=token)
+    assert first["submitted"] is True
     assert page.click_calls == ["#submit"]
-    assert len(page.screenshot_calls) == 1
-    assert page.wait_for_load_state_called is True
+
+    # Reusar el mismo token -> rechazado, sin segundo click.
+    second = await web_forms.browser_preview_submit(submit_selector="#submit", confirm=True, preview_token=token)
+    assert second["submitted"] is False
+    assert "error" in second
+    assert page.click_calls == ["#submit"]  # sigue habiendo un solo click
+
+
+@pytest.mark.anyio
+async def test_browser_preview_submit_expired_token_is_rejected(monkeypatch):
+    page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
+    _patch_page(monkeypatch, page)
+
+    # Emitir el token en t=0.
+    monkeypatch.setattr(web_forms, "_now_monotonic", lambda: 0.0)
+    token = (await web_forms.browser_preview_submit(submit_selector="#submit"))["preview_token"]
+
+    # Confirmar más tarde que el TTL (default 300s).
+    monkeypatch.setattr(web_forms, "_now_monotonic", lambda: 301.0)
+    result = await web_forms.browser_preview_submit(submit_selector="#submit", confirm=True, preview_token=token)
+
+    assert result["submitted"] is False
+    assert "error" in result
+    assert page.click_calls == []
+    assert token not in web_forms._preview_tokens  # el vencido se descarta
+
+
+@pytest.mark.anyio
+async def test_browser_preview_submit_token_bound_to_selector(monkeypatch):
+    page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
+    _patch_page(monkeypatch, page)
+
+    token = (await web_forms.browser_preview_submit(submit_selector="#submit-A"))["preview_token"]
+
+    # Mismo token pero otro botón -> rechazado.
+    result = await web_forms.browser_preview_submit(submit_selector="#submit-B", confirm=True, preview_token=token)
+
+    assert result["submitted"] is False
+    assert "error" in result
+    assert page.click_calls == []
+
+
+@pytest.mark.anyio
+async def test_browser_preview_submit_token_bound_to_page(monkeypatch):
+    page = _FakePage([{"name": "email", "type": "email", "value": "damian@example.com"}])
+    _patch_page(monkeypatch, page)
+
+    token = (await web_forms.browser_preview_submit(submit_selector="#submit"))["preview_token"]
+
+    # La navegación cambió de página entre el dry-run y el confirm.
+    page.url = "https://example.com/otra-pagina"
+    result = await web_forms.browser_preview_submit(submit_selector="#submit", confirm=True, preview_token=token)
+
+    assert result["submitted"] is False
+    assert "error" in result
+    assert page.click_calls == []
 
 
 @pytest.mark.anyio

@@ -22,6 +22,17 @@ que quedaron integradas y commiteadas:
   experimental **apagada** por default.
 - **Completado de formularios web** con credential store cifrado (DPAPI) +
   `shell_exec`, con dry-run + preview obligatorio antes de cualquier submit.
+  - **[2026-08-17] Gate de consentimiento del submit ahora con enforcement a
+    nivel código** (antes dependía SOLO del prompt del modelo). `browser_preview_submit`
+    con `confirm=false` emite un **preview token de un solo uso** (`pv-xxxxxxxx`)
+    atado a `submit_selector` + URL de la página + timestamp, guardado en un store
+    en memoria con TTL corto (`FORM_PREVIEW_TOKEN_TTL_SECONDS`, default 300s).
+    `confirm=true` ahora EXIGE el nuevo parámetro `preview_token`: sin él, o con uno
+    de otro formulario/página, vencido o ya usado, el submit se **rechaza sin hacer
+    click**. Mismo espíritu que el `proposal_id` de `selfrepair`. Archivos:
+    `app/tools/web_forms.py` (store + validación), `app/config.py` (TTL),
+    `app/skills.py` (prompt actualizado), `tests/test_web_forms.py` (cobertura del
+    gate). Tests de web_forms en verde (17/17).
 - **Pentesting activo**: sqlmap, OWASP ZAP y captura de paquetes (scapy) sumados
   a nmap, todos detrás del gate único `authorized_targets.yaml`.
 - **Pipeline de auto-reparación** (`selfrepair/`) con gate de aprobación manual,
