@@ -25,14 +25,31 @@ from . import register_tool
         "type": "object",
         "properties": {
             "title": {"type": "string", "description": "Título de la nota."},
-            "content": {"type": "string", "description": "Contenido en Markdown. Podés usar [[wikilinks]] a otras notas."},
-            "tags": {"type": "array", "items": {"type": "string"}, "description": "Tags opcionales para categorizar la nota."},
+            "content": {
+                "type": "string",
+                "description": (
+                    "Contenido en Markdown. Usá encabezados (##, ###) para estructurar la nota en "
+                    "secciones si tiene varias ideas, no un solo bloque de texto plano -- así después se "
+                    "puede leer solo la sección relevante en vez de la nota entera. Podés usar "
+                    "[[wikilinks]] a otras notas relacionadas (buscalas antes con obsidian_search_notes "
+                    "para no dejar la nota aislada del resto del vault)."
+                ),
+            },
+            "tags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Tags opcionales (varios a la vez) para categorizar la nota por más de un eje.",
+            },
+            "category": {
+                "type": "string",
+                "description": "Categoría temática principal de la nota, una sola (ej. 'seguridad', 'algoritmos'). Opcional.",
+            },
         },
         "required": ["title", "content"],
     },
 )
-def obsidian_save_note(title: str, content: str, tags: list[str] | None = None) -> dict:
-    note = vault.save_note(title=title, content=content, author="jarvis", tags=tags)
+def obsidian_save_note(title: str, content: str, tags: list[str] | None = None, category: str = "") -> dict:
+    note = vault.save_note(title=title, content=content, author="jarvis", tags=tags, category=category)
     return note.to_summary_dict()
 
 
