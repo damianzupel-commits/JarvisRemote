@@ -26,7 +26,12 @@ al mercado**.
   wikilinks (`[[nota]]`) igual que en el grafo de código. Pestaña "Obsidian"
   en la ventana de PC, con autoría separada entre lo que escribe Jarvis y lo
   que escribís vos. Incluye una base de conocimiento de ciberseguridad ya
-  cargada (OWASP Top 10, por vulnerabilidad, por herramienta SAST/SCA).
+  cargada (OWASP Top 10, por vulnerabilidad, por herramienta SAST/SCA). La
+  búsqueda es **semántica** (embeddings locales + similitud coseno, no solo
+  coincidencia de palabras) -- encuentra notas relacionadas aunque estén
+  escritas con vocabulario distinto, con keyword search como respaldo si el
+  server de embeddings no está corriendo. Ver detalle en el README de
+  `backend/`.
 - **Escaneo de seguridad y calidad real, no inventado por el LLM**: corre
   Semgrep, Bandit, cppcheck, clang-tidy y Trivy (seguridad) y Ruff/mypy
   (calidad) como subprocesos reales sobre el proyecto indexado, cachea el

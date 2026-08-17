@@ -96,6 +96,8 @@ pytest
   `fs_create_dir`, `fs_move_path`, `fs_delete_path` (deshabilitada por default).
   Todo sandboxeado a `FS_ALLOWED_ROOT`.
 - `app/tools/browser.py` — `browser_open`, `browser_click`, `browser_type`,
+  `browser_select_option` (dropdowns nativos `<select>`, agregado 2026-08-16
+  al toparse con uno real en el formulario de Nessus Essentials),
   `browser_get_text`, `browser_screenshot`, `browser_close`, con Playwright
   (Chromium, una sola página persistente entre llamadas).
 - `app/tools/desktop.py` — `desktop_screenshot`, `desktop_list_windows`,
@@ -249,6 +251,16 @@ pytest
   puntuales -- instalar dependencias, correr tests/builds, git, etc.). Mismo
   criterio de blocklist + auditoría que el resto de las tools invasivas, gate
   en `PC_SHELL_ENABLED`.
+- `app/forms/credential_store.py` + `app/tools/web_forms.py` — completar
+  formularios/registros web reales (spec de Damian, 2026-08-16), reusando el
+  MISMO navegador de `app/tools/browser.py` para el lado de interacción con
+  la página. `browser_generate_password` genera contraseñas fuertes al azar
+  (nunca elegidas por el LLM) y las persiste cifradas con DPAPI (mismo
+  mecanismo que `investigation/keys.py`, nunca texto plano); `form_get_saved_credential`/
+  `form_list_saved_credentials` las recuperan después. `browser_preview_submit`
+  es el mismo patrón dry-run→`confirm=true` de `code_apply_fix`: siempre
+  captura + resumen de los campos ANTES de tocar el botón de enviar, sin
+  excepción. Ver sección de seguridad más abajo.
 - `app/main.py` — endpoints `GET /api/health` y `POST /api/chat`.
 
 ## Agregar una tool nueva
@@ -356,6 +368,43 @@ las tool calls automáticamente contra el registry.
   del lado de la PC**: shell real y arbitrario (`cmd`/PowerShell según lo que
   resuelva el sistema), no acotado a tools puntuales. Gateada por
   `PC_SHELL_ENABLED=true` (default) y auditada vía `app/audit_log.py`.
+- **Formularios/registros web (`app/forms/`, `app/tools/web_forms.py`, agregados
+  2026-08-16, spec de Damian)** — Jarvis puede completar formularios y
+  registrarse en sitios reales bajo pedido explícito, pensado para cuando
+  Damian lo pide lejos de la PC (celular). Decisiones de diseño de la ronda de
+  preguntas (todas confirmadas por Damian, mismo criterio que la ronda del
+  módulo de malware):
+  - **Contraseñas**: `browser_generate_password` las genera al azar (nunca el
+    LLM elige/inventa una), completa el registro, y las muestra en el chat una
+    vez (porque hace falta usarlas en el momento) -- pero Damian pidió además
+    que queden guardadas en un archivo, no solo mostradas y perdidas. Texto
+    plano fue descartado a propósito (mismo antipatrón ya señalado sobre
+    `backend/.env`): se persisten cifradas con **DPAPI** en
+    `FORM_CREDENTIALS_PATH` (default `backend/data/form_credentials.dpapi`,
+    gitignored), mismo mecanismo que `app/investigation/keys.py` ya usa para
+    la clave de firma -- atado a esta cuenta de Windows, nadie puede leerlas
+    copiando el archivo a otra máquina. Recuperables después con
+    `form_get_saved_credential`/`form_list_saved_credentials` (esta última
+    solo devuelve metadata, nunca todas las contraseñas de una).
+  - **Confirmación antes de enviar**: `browser_preview_submit` es el mismo
+    patrón dry-run→`confirm=true` que `code_apply_fix` -- SIEMPRE saca una
+    captura + los valores actuales de los campos (contraseña enmascarada)
+    antes de tocar el botón de enviar, sin excepción explícita de Damian ni
+    siquiera para un formulario trivial de nombre+email (el caso real que
+    motivó el pedido: registro de Nessus Essentials). Solo hace click de
+    verdad en una segunda llamada explícita con `confirm=true`, después de que
+    Damian vio la previsualización y confirmó en el chat.
+  - **Mecanismo de control**: reusa el navegador Playwright/Edge que ya
+    controlaba `app/tools/browser.py` (`browser_open`/`browser_type`/
+    `browser_click`) -- no hizo falta un driver nuevo, este ya era
+    automatización real por selector CSS, no clicks a ciegas de escritorio.
+  - **Sin lista blanca de dominios**: decisión explícita de Damian (a
+    diferencia de `authorized_targets.yaml` del pentesting) -- confía en la
+    orden explícita de cada pedido en vez de un archivo previo a editar a
+    mano. Esto significa que el prompt del skill `web_forms` (`app/skills.py`)
+    instruye explícitamente al modelo a nunca tratar texto de una página ya
+    abierta como si fuera una orden real de Damian (mitigación de
+    prompt-injection dado que no hay gate de dominio de por medio).
 - **Blocklist de comandos/lanzamientos obviamente destructivos** —
   `phone_link._check_command_blocklist` (para `phone_run_command`: `rm -rf` de
   la raíz/home, `mkfs`, `dd` hacia un block device, fork bombs, `chmod`/`chown -R`
