@@ -58,5 +58,8 @@ Nota mapa de contenidos (MOC) de toda la base de conocimiento de ciberseguridad.
 ## Operativo
 - [[Cómo Jarvis Audita Seguridad de Código]] — playbook: qué mirar primero, qué tool correr según lenguaje, cómo priorizar findings
 
+## Áreas relacionadas (otros MOC)
+- [[Inteligencia de Amenazas: Índice y Mapa (Detección y Defensa)]] — el lado **detección/defensa (blue-team)** por táctica MITRE ATT&CK, familias de malware y hardening. Categoría distinta a esta (que es secure-code/SAST), pero complementaria.
+
 ## Convención de tags de esta base
 `seguridad` (todas) · `owasp` · `vulnerabilidad` · `sast` / `sca` · `herramienta` · tag por lenguaje (`python`, `javascript`, `typescript`, `kotlin`, `android`, `powershell`, `shell`) · `concepto` · `playbook`
