@@ -16,6 +16,9 @@ import json
 import logging.handlers
 import shutil
 import subprocess
+import sys
+import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -203,6 +206,21 @@ def test_start_recording_logs_to_audit_log(monkeypatch, caplog):
 
     entries = _audit_entries(caplog)
     assert any(e["tool"] == "recording_start" and e["ok"] is True for e in entries)
+
+
+def test_start_recording_assigns_process_to_job_object_for_crash_safety(monkeypatch):
+    """Unit test rápido/mockeado (sin win32 real) de que `start_recording`
+    efectivamente llama al hook del Job Object -- la prueba de que ESTO
+    mata a ffmpeg de verdad en un kill duro real es
+    `test_job_object_kills_ffmpeg_when_backend_is_hard_killed`, más abajo."""
+    fake_process = _FakeProcess()
+    _mock_popen(monkeypatch, fake_process)
+    calls = []
+    monkeypatch.setattr(recording, "_assign_to_job_for_crash_safety", calls.append)
+
+    recording.start_recording("algo")
+
+    assert calls == [fake_process]
 
 
 # ---------------------------------------------------------------------------
@@ -580,3 +598,101 @@ def test_start_and_stop_recording_produces_a_real_playable_mp4():
     probed = json.loads(probe.stdout)
     assert "mp4" in probed["format"]["format_name"]
     assert float(probed["format"]["duration"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Job Object -- ffmpeg no debe sobrevivir un kill duro del backend (ver
+# docstring del módulo, riesgo confirmado 2026-08-13, arreglado 2026-08-16).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Job Object es una feature de Windows")
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg no está en el PATH de esta máquina")
+def test_job_object_kills_ffmpeg_when_backend_is_hard_killed(tmp_path):
+    """El test adversarial real que motivó el fix: un proceso "backend"
+    aparte (subprocess de verdad, no un mock) arranca una grabación real,
+    y se lo mata DURO desde afuera (`taskkill /F` sin `/T`, sin mandarle
+    ninguna señal que un try/finally pueda atrapar -- exactamente el
+    escenario de un crash real). Antes del fix del Job Object, ffmpeg
+    sobrevivía como huérfano (confirmado en testing adversarial 2026-08-13,
+    ver docstring del módulo); con el fix, debe morir junto con el backend
+    sin que nadie le mande 'q' ni terminate().
+
+    Mismo experimento también valida el fix del mp4 fragmentado (ver
+    `_MOVFLAGS`, 2026-08-16): antes de ESE fix, el .mp4 resultante de este
+    mismo kill duro quedaba con "moov atom not found" -- ahora tiene que ser
+    reproducible de verdad (ffprobe) a pesar del kill duro. Se espera un
+    `_GOP_SECONDS` real de grabación antes de matar para garantizar que haya
+    al menos un fragmento ya cerrado en disco (sin esa espera, un kill
+    inmediato podría pegarle a mitad del PRIMER fragmento, todavía sin
+    cerrar, y el test no probaría lo que dice probar)."""
+    import psutil
+
+    helper_script = Path(__file__).resolve().parent / "_recording_job_object_helper.py"
+    output_dir = tmp_path / "recordings"
+    info_path = tmp_path / "info.json"
+
+    backend_proc = subprocess.Popen(
+        [sys.executable, str(helper_script), str(output_dir), str(info_path)],
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not info_path.exists():
+            time.sleep(0.25)
+        assert info_path.exists(), "el proceso helper nunca escribió info.json (¿no arrancó ffmpeg?)"
+
+        info = json.loads(info_path.read_text())
+        ffmpeg_pid = info["ffmpeg_pid"]
+        output_path = Path(info["output_path"])
+
+        # Confirma el estado de partida real antes de matar nada -- si esto
+        # falla, el test de abajo no probaría lo que dice probar.
+        assert psutil.pid_exists(backend_proc.pid)
+        assert psutil.pid_exists(ffmpeg_pid)
+
+        # Deja pasar más de un GOP real de grabación (ver docstring de
+        # `_GOP_SECONDS`) para que exista al menos un fragmento ya cerrado
+        # en disco antes del kill -- margen generoso (no un simple +2s):
+        # medido en vivo en esta máquina, gdigrab+libx264 real rinden bastante
+        # menos que los `_FRAMERATE` nominales bajo carga (CPU compartida con
+        # el resto de lo que corre en la sesión), así que un GOP de
+        # `_GOP_SECONDS` a fps nominal puede tardar bastante más en fps real.
+        time.sleep(max(recording._GOP_SECONDS * 4, 10))
+
+        subprocess.run(
+            ["taskkill", "/F", "/PID", str(backend_proc.pid)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and psutil.pid_exists(ffmpeg_pid):
+            time.sleep(0.25)
+
+        assert not psutil.pid_exists(ffmpeg_pid), (
+            f"ffmpeg (pid={ffmpeg_pid}) sobrevivió al kill duro del backend -- "
+            "el Job Object no lo mató, quedó huérfano."
+        )
+
+        assert output_path.is_file() and output_path.stat().st_size > 0
+
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration,format_name",
+                "-of", "json", str(output_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert probe.returncode == 0, (
+            f"ffprobe no pudo leer el .mp4 después del kill duro (mp4 fragmentado roto): {probe.stderr}"
+        )
+        probed = json.loads(probe.stdout)
+        assert "mp4" in probed["format"]["format_name"]
+        assert float(probed["format"]["duration"]) > 0
+    finally:
+        if backend_proc.poll() is None:
+            backend_proc.kill()
+        backend_proc.wait(timeout=10)
