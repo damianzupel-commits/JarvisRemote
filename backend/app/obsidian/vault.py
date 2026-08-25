@@ -146,7 +146,16 @@ def save_note(
     tags: list[str] | None = None,
     category: str = "",
     note_id: str | None = None,
+    extra: dict | None = None,
 ) -> VaultNote:
+    # `extra` (agregado 2026-08-18): properties de frontmatter adicionales,
+    # opcionales, para metadata que no encaja en el modelo fijo (title/author/
+    # tags/category/created/updated). Nace del pipeline de YouTube, que necesita
+    # persistir `relevancia`/`relevancia_score` en el frontmatter sin sumar
+    # campos al dataclass VaultNote ni tocar a los demás callers. Default None =
+    # comportamiento idéntico al de antes. `_note_from_path` ignora las keys que
+    # no conoce, así que estas properties viven en el .md pero no afectan la
+    # lectura ni los embeddings.
     if author not in AUTHORS:
         raise ValueError(f"author debe ser uno de {AUTHORS}, recibido '{author}'")
 
@@ -173,8 +182,9 @@ def save_note(
             counter += 1
         created = now
 
+    metadata = dict(extra or {})
     post = frontmatter.Post(
-        content, title=title, author=author, tags=tags, category=category, created=created, updated=now
+        content, title=title, author=author, tags=tags, category=category, created=created, updated=now, **metadata
     )
     path.write_text(frontmatter.dumps(post), encoding="utf-8")
 

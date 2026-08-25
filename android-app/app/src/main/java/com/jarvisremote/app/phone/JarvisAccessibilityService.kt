@@ -76,28 +76,59 @@ class JarvisAccessibilityService : AccessibilityService() {
 
     /**
      * Chequea la app en foreground contra el blocklist configurable (ver
-     * `AccessibilityBlocklist.kt` / `SettingsRepository.blockedPackages`) y tira
-     * [SensitiveAppBlockedException] si está bloqueada. Se llama al principio de
-     * cada acción — mitigación por nombre de paquete, no una garantía completa
-     * (ver el docstring de `isForegroundAppBlocked`).
+     * `AccessibilityBlocklist.kt` / `SettingsRepository.blockedPackages`) + los patrones
+     * de categorías sensibles, con failsafe conservador si el foreground es desconocido.
+     * Se llama al principio de CADA acción (tap/swipe/type/global/read).
+     *
+     * Si la app es sensible (o el foreground es desconocido) y el llamador NO pasó una
+     * confirmación explícita (`confirmed=false`), registra el evento en el audit log y
+     * tira [SensitiveAppBlockedException] — la acción NO se ejecuta. Si `confirmed=true`,
+     * deja pasar la acción pero también la registra (ejecución bajo confirmación explícita).
+     *
+     * Es una mitigación por nombre de paquete, no una garantía completa (ver el docstring
+     * de `evaluateForegroundApp`).
      */
-    private suspend fun assertForegroundAppNotBlocked() {
+    private suspend fun assertForegroundAppNotBlocked(action: String, confirmed: Boolean) {
         val blockedPackages = SettingsRepository(applicationContext).settingsFlow.first().blockedPackages
         val currentPackage = rootInActiveWindow?.packageName?.toString()
-        if (isForegroundAppBlocked(currentPackage, blockedPackages)) {
-            throw SensitiveAppBlockedException(currentPackage!!)
+        when (val verdict = evaluateForegroundApp(currentPackage, blockedPackages, confirmed = confirmed)) {
+            is BlocklistVerdict.Allowed -> {
+                // Si venía confirmado y era sensible, dejamos rastro de la ejecución forzada.
+                if (confirmed) {
+                    val why = evaluateForegroundApp(currentPackage, blockedPackages, confirmed = false)
+                    if (why is BlocklistVerdict.NeedsConfirmation) {
+                        BlocklistAuditLog.record(
+                            applicationContext,
+                            BlocklistAuditLog.Outcome.ALLOWED_WITH_CONFIRMATION,
+                            action,
+                            why.reason,
+                            why.packageName,
+                        )
+                    }
+                }
+            }
+            is BlocklistVerdict.NeedsConfirmation -> {
+                BlocklistAuditLog.record(
+                    applicationContext,
+                    BlocklistAuditLog.Outcome.BLOCKED_NEEDS_CONFIRMATION,
+                    action,
+                    verdict.reason,
+                    verdict.packageName,
+                )
+                throw SensitiveAppBlockedException(verdict.packageName, verdict.reason)
+            }
         }
     }
 
-    suspend fun tap(x: Int, y: Int) {
-        assertForegroundAppNotBlocked()
+    suspend fun tap(x: Int, y: Int, confirmed: Boolean = false) {
+        assertForegroundAppNotBlocked("tap", confirmed)
         val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val stroke = GestureDescription.StrokeDescription(path, 0, 50)
         dispatchGestureAwait(GestureDescription.Builder().addStroke(stroke).build())
     }
 
-    suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int) {
-        assertForegroundAppNotBlocked()
+    suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Int, confirmed: Boolean = false) {
+        assertForegroundAppNotBlocked("swipe", confirmed)
         val path = Path().apply {
             moveTo(x1.toFloat(), y1.toFloat())
             lineTo(x2.toFloat(), y2.toFloat())
@@ -128,8 +159,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
     }
 
-    suspend fun typeText(text: String) {
-        assertForegroundAppNotBlocked()
+    suspend fun typeText(text: String, confirmed: Boolean = false) {
+        assertForegroundAppNotBlocked("type_text", confirmed)
         val focused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
             ?: throw IllegalStateException(
                 "No hay ningún campo de texto enfocado. Usá phone_tap para enfocarlo primero."
@@ -141,8 +172,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         if (!ok) throw RuntimeException("El campo enfocado rechazó el texto")
     }
 
-    suspend fun globalAction(action: String) {
-        assertForegroundAppNotBlocked()
+    suspend fun globalAction(action: String, confirmed: Boolean = false) {
+        assertForegroundAppNotBlocked("global_action:$action", confirmed)
         val code = when (action) {
             "back" -> GLOBAL_ACTION_BACK
             "home" -> GLOBAL_ACTION_HOME
@@ -155,8 +186,8 @@ class JarvisAccessibilityService : AccessibilityService() {
         }
     }
 
-    suspend fun readScreen(): kotlinx.serialization.json.JsonObject {
-        assertForegroundAppNotBlocked()
+    suspend fun readScreen(confirmed: Boolean = false): kotlinx.serialization.json.JsonObject {
+        assertForegroundAppNotBlocked("read_screen", confirmed)
         val root = rootInActiveWindow
             ?: return buildJsonObject { put("nodes", buildJsonArray {}) }
         val nodes = buildJsonArray {

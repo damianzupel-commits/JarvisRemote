@@ -1,3 +1,6 @@
+# Cocina de prueba de Claude (scratch del asistente, no versionar)
+_cocina-claude/
+
 # Python
 __pycache__/
 *.pyc
@@ -35,6 +38,11 @@ id_rsa*
 # Logs (todos) -- se regeneran solos, nunca son codigo fuente
 *.log
 *.log.*
+
+# Logs de la auto-ingesta programada de la playlist (scripts/auto_ingest_playlist.ps1).
+# Ya cubiertos por *.log de arriba; se lista la carpeta explicito para que quede
+# claro que su contenido es local y no se versiona.
+logs/auto-ingest/
 
 # Estado local del agente Claude Code (worktrees, settings locales) -- copias
 # completas del repo y config de esta maquina, no son parte del proyecto.
@@ -142,3 +150,11 @@ Thumbs.db
 # Informes en Word generados para uso personal (docs/ solo trackea el diagrama
 # de arquitectura, que sí se usa en README.md).
 docs/*.docx
+
+# Backups locales del proyecto (auto-respaldo horario) -- snapshots .zip que
+# pueden contener .env/secretos y el vault privado Vault-Fenix. Nunca al repo publico.
+_backups/
+
+# Captura suelta de ventana PowerShell (artefacto de debug, mismo criterio que
+# la captura de escritorio de arriba).
+backend/powershell_window.png

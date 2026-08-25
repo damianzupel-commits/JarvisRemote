@@ -27,13 +27,13 @@ import javax.crypto.spec.GCMParameterSpec
  * puede descifrarlo, en vez de fallar. La próxima vez que se guarde el API key
  * (`SettingsRepository.saveBackendConfig`), queda cifrado.
  *
- * **No tiene test unitario JVM**: `android.security.keystore.*` solo existe en
- * el framework real de Android (KeyStore provider "AndroidKeyStore"), no hay
- * forma de instanciarlo en un JVM test puro sin Robolectric (que tampoco lo
- * simula bien — es un punto de dolor conocido). Pendiente de validar con un
- * test instrumentado (`androidTest`) contra un dispositivo/emulador real —
- * no se pudo hacer en esta sesión porque el celular de Damian no estaba
- * disponible. Sí se confirmó que compila (`gradlew assembleDebug`).
+ * **Tests JVM parciales**: la lógica de framing (IV+ciphertext) y los
+ * short-circuits de string vacío SÍ se testean en JVM (ver `ApiKeyCryptoTest`).
+ * Lo que NO se puede testear sin device/emulador es el round-trip de cifrado
+ * real: `android.security.keystore.*` (KeyStore provider "AndroidKeyStore") solo
+ * existe en el framework real de Android, y Robolectric no lo simula bien — es un
+ * punto de dolor conocido. El round-trip encrypt→decrypt queda pendiente de
+ * validar con un test instrumentado (`androidTest`) contra un dispositivo real.
  */
 object ApiKeyCrypto {
     private const val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -41,6 +41,23 @@ object ApiKeyCrypto {
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val GCM_IV_LENGTH_BYTES = 12
     private const val GCM_TAG_LENGTH_BITS = 128
+
+    /**
+     * Framing IV+ciphertext, aislado como funciones puras (sin Android/Keystore) para
+     * poder testear en JVM la parte más propensa a bugs de índices. El material real de
+     * cifrado sigue viniendo del Android Keystore (ver [encrypt]/[decrypt]).
+     */
+    internal fun frame(iv: ByteArray, ciphertext: ByteArray): ByteArray = iv + ciphertext
+
+    internal fun extractIv(combined: ByteArray): ByteArray {
+        require(combined.size >= GCM_IV_LENGTH_BYTES) { "Blob demasiado corto para contener el IV" }
+        return combined.copyOfRange(0, GCM_IV_LENGTH_BYTES)
+    }
+
+    internal fun extractCiphertext(combined: ByteArray): ByteArray {
+        require(combined.size >= GCM_IV_LENGTH_BYTES) { "Blob demasiado corto para contener el IV" }
+        return combined.copyOfRange(GCM_IV_LENGTH_BYTES, combined.size)
+    }
 
     private fun getOrCreateKey(): SecretKey {
         val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
@@ -66,7 +83,7 @@ object ApiKeyCrypto {
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
         val iv = cipher.iv
         val ciphertext = cipher.doFinal(plaintext.toByteArray(Charsets.UTF_8))
-        return Base64.encodeToString(iv + ciphertext, Base64.NO_WRAP)
+        return Base64.encodeToString(frame(iv, ciphertext), Base64.NO_WRAP)
     }
 
     /** Reversa de [encrypt]. Ver nota de migración arriba sobre el fallback. */
@@ -74,8 +91,8 @@ object ApiKeyCrypto {
         if (stored.isEmpty()) return ""
         return try {
             val combined = Base64.decode(stored, Base64.NO_WRAP)
-            val iv = combined.copyOfRange(0, GCM_IV_LENGTH_BYTES)
-            val ciphertext = combined.copyOfRange(GCM_IV_LENGTH_BYTES, combined.size)
+            val iv = extractIv(combined)
+            val ciphertext = extractCiphertext(combined)
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), GCMParameterSpec(GCM_TAG_LENGTH_BITS, iv))
             String(cipher.doFinal(ciphertext), Charsets.UTF_8)

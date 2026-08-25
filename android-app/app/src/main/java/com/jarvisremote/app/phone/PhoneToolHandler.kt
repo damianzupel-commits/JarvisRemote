@@ -35,6 +35,14 @@ object PhoneToolHandler {
     private fun JsonObject.optBoolean(name: String, default: Boolean): Boolean =
         (this[name] as? JsonPrimitive)?.booleanOrNull ?: default
 
+    /**
+     * Confirmación explícita del usuario/LLM para forzar una acción sobre una app sensible
+     * o un comando peligroso (patrón dry-run→confirm=true del proyecto). Se acepta tanto
+     * `confirm_sensitive` como `confirm` para tolerar ambas convenciones del backend.
+     */
+    private fun confirmSensitive(arguments: JsonObject): Boolean =
+        arguments.optBoolean("confirm_sensitive", false) || arguments.optBoolean("confirm", false)
+
     suspend fun handle(context: Context, tool: String, arguments: JsonObject): JsonElement {
         val settingsRepository = SettingsRepository(context)
 
@@ -68,7 +76,7 @@ object PhoneToolHandler {
             }
 
             "phone_tap" -> {
-                accessibility().tap(arguments.reqInt("x"), arguments.reqInt("y"))
+                accessibility().tap(arguments.reqInt("x"), arguments.reqInt("y"), confirmSensitive(arguments))
                 buildJsonObject { put("tapped", JsonPrimitive(true)) }
             }
 
@@ -79,27 +87,53 @@ object PhoneToolHandler {
                     arguments.reqInt("x2"),
                     arguments.reqInt("y2"),
                     arguments.optInt("duration_ms", 300),
+                    confirmSensitive(arguments),
                 )
                 buildJsonObject { put("swiped", JsonPrimitive(true)) }
             }
 
             "phone_type_text" -> {
-                accessibility().typeText(arguments.reqString("text"))
+                accessibility().typeText(arguments.reqString("text"), confirmSensitive(arguments))
                 buildJsonObject { put("typed", JsonPrimitive(true)) }
             }
 
-            "phone_read_screen" -> accessibility().readScreen()
+            "phone_read_screen" -> accessibility().readScreen(confirmSensitive(arguments))
 
             "phone_global_action" -> {
-                accessibility().globalAction(arguments.reqString("action"))
+                accessibility().globalAction(arguments.reqString("action"), confirmSensitive(arguments))
                 buildJsonObject { put("action_performed", JsonPrimitive(true)) }
             }
 
-            "phone_run_command" -> TermuxCommandRunner.run(
-                context,
-                arguments.reqString("command"),
-                arguments.optInt("timeout", 30) * 1000L,
-            )
+            "phone_run_command" -> {
+                val command = arguments.reqString("command")
+                // Gate de comandos peligrosos (reutiliza el patrón dry-run→confirm=true del
+                // proyecto): si el comando puede afectar apps/datos sensibles y el llamador no
+                // confirmó explícitamente, se registra en el audit log y se rechaza.
+                if (isDangerousPhoneCommand(command) && !confirmSensitive(arguments)) {
+                    BlocklistAuditLog.record(
+                        context,
+                        BlocklistAuditLog.Outcome.BLOCKED_NEEDS_CONFIRMATION,
+                        "phone_run_command",
+                        BlockReason.PATTERN_MATCH,
+                        command.take(120),
+                    )
+                    throw DangerousCommandBlockedException(command)
+                }
+                if (isDangerousPhoneCommand(command)) {
+                    BlocklistAuditLog.record(
+                        context,
+                        BlocklistAuditLog.Outcome.ALLOWED_WITH_CONFIRMATION,
+                        "phone_run_command",
+                        BlockReason.PATTERN_MATCH,
+                        command.take(120),
+                    )
+                }
+                TermuxCommandRunner.run(
+                    context,
+                    command,
+                    arguments.optInt("timeout", 30) * 1000L,
+                )
+            }
 
             "phone_take_photo" -> PhoneCameraProvider.instance
                 .takePhoto(context, isFrontCameraRequested(arguments))

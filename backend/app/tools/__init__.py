@@ -238,6 +238,7 @@ from . import pentest_sqlmap  # noqa: E402,F401
 from . import pentest_wireshark  # noqa: E402,F401
 from . import pentest_zap  # noqa: E402,F401
 from . import malware  # noqa: E402,F401
+from . import ingestion  # noqa: E402,F401
 
 # generate_video/generate_image (video_gen.py/image_gen.py) DESACTIVADAS a
 # propósito, no importadas -- no es un problema de estilo, es una precaución

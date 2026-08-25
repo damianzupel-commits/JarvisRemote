@@ -13,6 +13,35 @@ def _bool(value: str | None, default: bool) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
+# Raíz del proyecto JarvisRemote (la carpeta que contiene backend/, content/,
+# etc.). config.py vive en backend/app/, así que dos niveles arriba de `app`
+# es la raíz del repo. Se usa como default acotado de FS_ALLOWED_ROOT (ver
+# abajo): contiene el vault (backend/obsidian_vault/), los datos derivados
+# (backend/app/data/... vía CODEBASE_INDEX_DIR/SECURITY_SCAN_DIR/etc.), los
+# logs y las propuestas de self-repair -- todo lo que Jarvis legítimamente
+# necesita escribir para funcionar, sin abrir el HOME entero.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def _split_paths(value: str | None) -> list[str]:
+    """Parsea una lista de rutas separadas por coma o punto y coma. Vacío ->
+    lista vacía. Usado por FS_ALLOWED_ROOTS para configurar VARIAS raíces
+    permitidas sin volver a abrir todo el HOME.
+
+    A propósito NO se usa os.pathsep como separador: en este proyecto (Windows)
+    os.pathsep es ';' -- ya cubierto explícitamente abajo -- pero las rutas de
+    Windows usan ':' en la letra de unidad ('C:\\...'), así que separar por ':'
+    partiría cada ruta al medio. Coma y punto y coma son inambiguos."""
+    if not value:
+        return []
+    parts: list[str] = []
+    for chunk in value.replace(";", ",").split(","):
+        chunk = chunk.strip()
+        if chunk:
+            parts.append(chunk)
+    return parts
+
+
 class Settings:
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8000"))
@@ -22,6 +51,13 @@ class Settings:
 
     lmstudio_base_url: str = os.getenv("LMSTUDIO_BASE_URL", "http://localhost:1234/v1")
     lmstudio_model: str = os.getenv("LMSTUDIO_MODEL", "local-model")
+    # API key del proveedor LLM de chat/agente (llm_client.py). Default
+    # "lm-studio": el servidor local (LM Studio/Ollama) no valida la key pero
+    # el SDK de OpenAI exige mandar algo, así que este default deja el
+    # comportamiento local idéntico al anterior. Se hace configurable por env
+    # (LLM_API_KEY) para poder apuntar el cliente a proveedores cloud que sí
+    # exigen una key real (OpenRouter/DeepSeek, etc.) sin tocar código.
+    llm_api_key: str = os.getenv("LLM_API_KEY", "lm-studio")
 
     # Bug real 2026-08-10 (v6, sesión de creación del mod de Fabric): el cliente
     # OpenAI (app/llm_client.py) no tenía timeout explícito -- el SDK usaba su
@@ -31,6 +67,26 @@ class Settings:
     # Generoso a propósito: mejor esperar de más que cortar una generación real
     # en curso y forzar un reprocesamiento carísimo.
     llm_request_timeout_seconds: float = float(os.getenv("LLM_REQUEST_TIMEOUT_SECONDS", "1800"))
+
+    # Reintentos con backoff exponencial para fallas TRANSITORIAS de red al
+    # llamar al LLM desde el loop del agente (agregado 2026-08-19, ver
+    # app/agent.py::_create_chat_completion / _is_transient_llm_error).
+    # Complementa -- no contradice -- el max_retries=0 del SDK en
+    # llm_client.py: ahí se desactivan los reintentos AUTOMÁTICOS del SDK (que
+    # reprocesaban el prompt entero ante un timeout de una generación local
+    # legítimamente lenta, bug v6); acá se agrega un reintento EXPLÍCITO,
+    # logueado y acotado a errores de CONEXIÓN, pensado sobre todo para el
+    # modelo cloud (gpt-oss:120b-cloud), donde una caída de red transitoria SÍ
+    # se recupera reintentando. max_attempts=3 => hasta 3 intentos totales.
+    llm_retry_max_attempts: int = int(os.getenv("LLM_RETRY_MAX_ATTEMPTS", "3"))
+    llm_retry_base_delay_seconds: float = float(os.getenv("LLM_RETRY_BASE_DELAY_SECONDS", "1.0"))
+    llm_retry_max_delay_seconds: float = float(os.getenv("LLM_RETRY_MAX_DELAY_SECONDS", "30.0"))
+    # Reintentar también ante APITimeoutError. Default False a propósito: un
+    # timeout contra el modelo LOCAL suele ser una generación real lenta (no un
+    # fallo de red) y reintentarla reprocesa el prompt entero desde cero (bug
+    # real v6). Prender solo si se usa el modelo cloud y se entiende el
+    # trade-off.
+    llm_retry_on_timeout: bool = _bool(os.getenv("LLM_RETRY_ON_TIMEOUT"), False)
 
     # Server + modelo de embeddings para memoria semántica del vault (ver
     # app/obsidian/embeddings.py). A propósito NO reusa LMSTUDIO_BASE_URL:
@@ -44,8 +100,73 @@ class Settings:
     embedding_base_url: str = os.getenv("EMBEDDING_BASE_URL", "http://127.0.0.1:1234/v1")
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-nomic-embed-text-v1.5")
 
-    fs_allowed_root: str = os.getenv("FS_ALLOWED_ROOT", str(Path.home()))
+    # Sandbox de filesystem de las tools fs_* (app/tools/filesystem.py) y del
+    # cwd del shell real (pc_command.py / opencode.py, que reusan el mismo
+    # _resolve). TODA lectura/escritura/ejecución tiene que caer dentro de
+    # alguna de las raíces permitidas o falla con PermissionError.
+    #
+    # DEFAULT CAMBIADO 2026-08-19: antes era el HOME entero (Path.home(),
+    # C:\Users\dam) -- demasiado amplio, dejaba a Jarvis tocar CUALQUIER cosa
+    # del usuario (documentos, otras carpetas, etc.). Ahora el default es la
+    # RAÍZ DEL PROYECTO (_PROJECT_ROOT), que ya contiene todo lo que Jarvis
+    # necesita para funcionar: el vault, los datos derivados, logs y
+    # propuestas de self-repair (ver comentario de _PROJECT_ROOT).
+    #
+    # CÓMO AMPLIARLO si algo legítimo quedó afuera (ej. auditar/editar un repo
+    # que vive en otra carpeta del disco): NO volver a poner el HOME entero.
+    # En vez de eso, agregar esa(s) carpeta(s) puntuales a FS_ALLOWED_ROOTS
+    # (lista separada por comas), que se SUMA a FS_ALLOWED_ROOT. Ej.:
+    #   FS_ALLOWED_ROOTS=C:\Users\dam\otro-repo,D:\proyectos\cliente
+    # Nota: el indexado de codebase (codebase_*) es de SOLO LECTURA y NO está
+    # sandboxeado (ver app/tools/codebase.py), y el ciclo de fixes
+    # (code_apply_fix -> app/codeedit/fixer.py) valida contra la raíz del repo
+    # que se le pasa, no contra FS_ALLOWED_ROOT -- así que auditar y aplicar
+    # fixes a un repo externo sigue funcionando aunque no esté en el sandbox.
+    fs_allowed_root: str = os.getenv("FS_ALLOWED_ROOT", str(_PROJECT_ROOT))
+    fs_allowed_roots_extra: list[str] = _split_paths(os.getenv("FS_ALLOWED_ROOTS"))
     fs_allow_delete: bool = _bool(os.getenv("FS_ALLOW_DELETE"), False)
+
+    # Raíz AMPLIA del modo SUPERVISADO (attended), agregado 2026-08-19 junto con
+    # app/operation_mode.py. Cuando hay un humano usando Jarvis en vivo, el
+    # sandbox se abre a esta raíz -- por default el HOME entero, que es la
+    # potencia que Damian tenía ANTES de achicar FS_ALLOWED_ROOT al proyecto.
+    # La idea del sistema de dos modos: con Damian presente para frenar una
+    # macana no se pierde capacidad; el radio de daño solo se acota cuando
+    # Jarvis corre SOLO (modo AUTÓNOMO, que usa fs_allowed_roots, el sandbox
+    # chico). Configurable con FS_SUPERVISED_ROOT si Damian quiere otra raíz
+    # amplia en vez del HOME. Ver Settings.fs_supervised_roots y
+    # operation_mode.effective_fs_roots.
+    fs_supervised_root: str = os.getenv("FS_SUPERVISED_ROOT", str(Path.home()))
+
+    @property
+    def fs_allowed_roots(self) -> list[str]:
+        """Raíces del sandbox ACOTADO (modo AUTÓNOMO): la principal
+        (fs_allowed_root, por default el proyecto) más las extra
+        (FS_ALLOWED_ROOTS), deduplicadas preservando el orden. La principal va
+        primero: las rutas relativas se resuelven contra ella (ver
+        filesystem._resolve). En modo SUPERVISADO se usa fs_supervised_roots."""
+        return self._dedup_roots([self.fs_allowed_root, *self.fs_allowed_roots_extra])
+
+    @property
+    def fs_supervised_roots(self) -> list[str]:
+        """Raíces del sandbox AMPLIO (modo SUPERVISADO): el root amplio
+        (fs_supervised_root, por default el HOME) PRIMERO -- así las rutas
+        relativas se resuelven contra el HOME, restaurando el comportamiento
+        potente de siempre -- seguido de las raíces del sandbox acotado, para
+        garantizar que SUPERVISADO nunca tenga MENOS acceso que AUTÓNOMO
+        (supervisado ⊇ autónomo). Deduplicado preservando el orden."""
+        return self._dedup_roots([self.fs_supervised_root, *self.fs_allowed_roots])
+
+    @staticmethod
+    def _dedup_roots(roots: list[str]) -> list[str]:
+        """Filtra vacíos y deduplica preservando el orden."""
+        seen: set[str] = set()
+        unique: list[str] = []
+        for root in roots:
+            if root and root not in seen:
+                seen.add(root)
+                unique.append(root)
+        return unique
 
     browser_headless: bool = _bool(os.getenv("BROWSER_HEADLESS"), False)
 
@@ -549,7 +670,12 @@ class Settings:
     # de verdad se quiere escanear otra raíz.
     malware_full_scan_enabled: bool = _bool(os.getenv("MALWARE_FULL_SCAN_ENABLED"), True)
     malware_full_scan_interval_hours: float = float(os.getenv("MALWARE_FULL_SCAN_INTERVAL_HOURS", "24"))
-    malware_full_scan_root: str = os.getenv("MALWARE_FULL_SCAN_ROOT", "")  # vacío = usa fs_allowed_root
+    # vacío = usa el HOME del usuario (Path.home()). Ojo: a partir del
+    # 2026-08-19 esto NO reusa fs_allowed_root (que se achicó del HOME a la
+    # raíz del proyecto) -- el barrido antimalware necesita cubrir toda la
+    # carpeta del usuario (Descargas/Documentos/etc.), no solo el proyecto.
+    # Ver app/malware/fullscan.py::run_full_scan.
+    malware_full_scan_root: str = os.getenv("MALWARE_FULL_SCAN_ROOT", "")
 
     # Carpetas de riesgo típico para el escaneo "on-access" (YARA+ClamAV sobre
     # cada archivo nuevo apenas aparece, vía watchdog) -- coma-separado.

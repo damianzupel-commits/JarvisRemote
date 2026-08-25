@@ -108,3 +108,14 @@ yara-python>=4.5
 psutil>=6.0
 watchdog>=5.0
 clamd>=1.0.2
+# Ingesta automática de playlists de YouTube al vault (ver
+# app/ingestion/youtube_playlist.py) -- reemplaza el flujo manual de pasar
+# cada video por NotebookLM a mano. yt-dlp: enumera la playlist en modo flat
+# (solo metadata, sin bajar los videos) y también sirve de fallback para
+# subtítulos. youtube-transcript-api: baja la transcripción real del video
+# (prefiere español, cae a inglés). ⚠️ El pipeline NO se pudo probar contra
+# YouTube real (entorno con YouTube bloqueado por red) -- los tests corren con
+# transcripciones/listados/LLM mockeados; Damian tiene que validarlo una vez
+# en su PC end-to-end. Ver el docstring del módulo.
+yt-dlp>=2024.8
+youtube-transcript-api>=0.6

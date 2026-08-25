@@ -3,6 +3,7 @@ pida el modelo, le devuelve los resultados, y repite hasta que responda en texto
 plano o se llegue al tope de iteraciones.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -10,7 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from openai import APIConnectionError, APITimeoutError
+
 from . import audit_log
+from . import operation_mode
 from .config import settings
 from .llm_client import client
 from .obsidian import profile as vault_profile
@@ -22,6 +26,66 @@ from .tools import call_tool, openai_tool_schemas
 from .video_frames import extract_frames_from_video_base64
 
 logger = logging.getLogger("jarvis.agent")
+
+
+def _is_transient_llm_error(exc: Exception) -> bool:
+    """¿Es una falla TRANSITORIA de red al hablar con el LLM (vale la pena
+    reintentar) o una falla real (hay que propagarla)?
+
+    - APIConnectionError (conexión rechazada/reset/DNS, etc.): transitorio, sí.
+    - APITimeoutError: por default NO se reintenta. Un timeout contra el modelo
+      LOCAL suele ser una generación real lenta, no un fallo de red -- y
+      reintentarla reprocesa el prompt entero desde cero (bug real v6, ver
+      LLM_REQUEST_TIMEOUT_SECONDS y llm_client.py). Con el modelo cloud puede
+      tener sentido; queda como opt-in vía LLM_RETRY_ON_TIMEOUT.
+    - Cualquier otra cosa (respuesta inválida, error de status 4xx, error de
+      lógica): NO transitorio, se propaga sin reintentar para no enmascararla.
+
+    APITimeoutError es subclase de APIConnectionError, así que se chequea
+    PRIMERO."""
+    if isinstance(exc, APITimeoutError):
+        return settings.llm_retry_on_timeout
+    if isinstance(exc, APIConnectionError):
+        return True
+    return False
+
+
+async def _create_chat_completion(**kwargs: Any):
+    """Envuelve `client.chat.completions.create` con reintentos + backoff
+    exponencial SOLO para fallas transitorias de red (ver
+    `_is_transient_llm_error`). Complementa -- no reemplaza -- el max_retries=0
+    del SDK en llm_client.py y los guardrails anti-loop del propio agente:
+    esto reintenta una LLAMADA que falló por RED, no el razonamiento del modelo.
+
+    No enmascara errores: una falla no transitoria se propaga en el primer
+    intento, y cuando se agotan los intentos la última excepción transitoria
+    también se propaga (para que el manejo de arriba -- fallback de visión /
+    re-raise -- siga funcionando igual). Cada reintento se loguea con el
+    motivo, para no ocultar problemas de fondo de red."""
+    max_attempts = max(1, settings.llm_retry_max_attempts)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return await client.chat.completions.create(**kwargs)
+        except Exception as exc:  # noqa: BLE001 -- se re-lanza salvo transitorio
+            if not _is_transient_llm_error(exc) or attempt >= max_attempts:
+                raise
+            delay = min(
+                settings.llm_retry_base_delay_seconds * (2 ** (attempt - 1)),
+                settings.llm_retry_max_delay_seconds,
+            )
+            logger.warning(
+                "LLM call: intento %d/%d falló con error transitorio de red "
+                "(%s: %s); backoff %.1fs y reintento",
+                attempt,
+                max_attempts,
+                type(exc).__name__,
+                exc,
+                delay,
+            )
+            await asyncio.sleep(delay)
+
 
 SYSTEM_PROMPT = (
     "Sos Jarvis, un asistente que corre localmente en la PC del usuario y que puede "
@@ -895,8 +959,20 @@ async def _run_agent_turn(message: str, conv_id: str, active_profile: str) -> tu
             "_run_agent_turn: ya había una grabación activa al EMPEZAR un turno nuevo "
             "(¿un turno anterior no llegó a su finally?) -- se sigue sin tocarla."
         )
+    # Log SIEMPRE del modo con el que corre este turno (SUPERVISADO si lo declaró
+    # el punto de entrada interactivo, AUTÓNOMO por default), para que quede
+    # auditable qué radio de filesystem tuvo cada turno. Y se marca el turno
+    # como activo (agent_turn_active): habilita el guardrail anti-auto-escalada
+    # de operation_mode.operating_as -- desde adentro del loop, Jarvis no puede
+    # ampliarse el modo de AUTÓNOMO a SUPERVISADO.
+    logger.info(
+        "Turno del agente en modo %s. Roots de filesystem efectivos: %s",
+        operation_mode.current_mode().value,
+        operation_mode.effective_fs_roots(),
+    )
     try:
-        return await _run_agent_turn_inner(message, conv_id, active_profile)
+        with operation_mode.agent_turn_active():
+            return await _run_agent_turn_inner(message, conv_id, active_profile)
     finally:
         recording.stop_recording()
 
@@ -970,7 +1046,12 @@ async def _run_agent_turn_inner(message: str, conv_id: str, active_profile: str)
         # se vuelve stale (o contradice lo que el modelo dijo antes) a medida que la
         # conversación crece.
         try:
-            response = await client.chat.completions.create(
+            # _create_chat_completion agrega reintentos + backoff SOLO para
+            # fallas transitorias de red (ver su docstring y
+            # _is_transient_llm_error) -- una falla no transitoria se propaga
+            # igual que antes y cae en el except de abajo (fallback de visión /
+            # re-raise).
+            response = await _create_chat_completion(
                 model=settings.lmstudio_model,
                 messages=history + [_phone_status_note()],
                 tools=tools or None,

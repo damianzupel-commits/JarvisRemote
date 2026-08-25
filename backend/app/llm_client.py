@@ -18,7 +18,7 @@ from .config import settings
 # automáticamente solo reprocesa el prompt entero para nada.
 client = AsyncOpenAI(
     base_url=settings.lmstudio_base_url,
-    api_key="lm-studio",
+    api_key=settings.llm_api_key,
     timeout=settings.llm_request_timeout_seconds,
     max_retries=0,
 )

@@ -77,6 +77,89 @@ Cambio de una línea que ya reduce muchísimo la superficie de ataque.
 2. ¿Vale el costo de RAM/CPU de Docker Desktop siempre corriendo (la PC ya tuvo
    apagados por consumo) o el container se levanta solo bajo demanda?
 
+## Cyber range (en armado)
+
+Se está montando el **laboratorio de pentesting aislado** para probar los módulos
+ofensivos y de detección de Jarvis (diseño en `lab/CYBER-RANGE-DESIGN.md` +
+`lab/DETECCION-ESTRES-NOCTURNO.md`). **Guía de continuación:
+`lab/RETOMAR-LAB.md`** — leela para retomar sin perder el hilo.
+
+Estado actual (2026-08-17):
+
+- **VirtualBox 7.2.14** + Extension Pack instalados (se fue con el plan B del
+  diseño; VMware era la recomendación, pero VBox es válido — sin auto-snapshots,
+  se hacen a mano).
+- **Kali 2026.2** importada: Adaptador 1 = Red interna "labnet" (ataque, aislada),
+  Adaptador 2 = NAT (solo updates, apagar en ataques).
+- **Metasploitable 2** creada con `Metasploitable.vmdk`, Adaptador 1 = labnet
+  (una sola placa, sin NAT).
+- **Servidor DHCP en labnet** (`VBoxManage dhcpserver add`): rango
+  10.13.37.100–200, server-ip 10.13.37.1, máscara 255.255.255.0. Coincide con el
+  `10.13.37.0/24` del diseño.
+- **Quedó a mitad:** Metasploitable booteando; falta loguear (msfadmin/msfadmin),
+  sacar IP con `ifconfig`, encender Kali (kali/kali) y verificar conectividad +
+  tomar snapshots BASE. Ver checklist en `lab/RETOMAR-LAB.md` §2.
+
+Pendientes destacados del range: instalar Docker Desktop (DVWA/Juice Shop/Caldera),
+Atomic Red Team + MITRE Caldera v5, agregar `10.13.37.0/24` a
+`authorized_targets.yaml` a mano antes de que Jarvis toque los blancos, y
+registrar Nessus Essentials en tenable.com (Damian, desde el celular).
+
+## Orquestación remota (diseño nuevo, sin implementar)
+
+**Diseño: `lab/ORQUESTACION-REMOTA-DESIGN.md`** (2026-08-17, solo diseño, no toca
+código). Cómo Damian controla a Jarvis **desde el celular estando fuera de casa**
+para orquestar el cyber range (abrir/manejar VMs, lanzar pentest/detección en
+labnet, reportar) sin debilitar ningún gate existente. Decisiones clave:
+
+- **Canal remoto solo por Tailscale** (nada expuesto a internet, router sin
+  puertos abiertos): backend atado a la interfaz Tailscale vía `tailscale serve`
+  (o bind a la IP `100.x`), grant de tailnet celular↔PC solo-ese-puerto.
+- **Auth por dispositivo** (token/JWT) guardado con **DPAPI** (reusa el patrón de
+  `forms/credential_store.py` e `investigation/keys.py`), revocable/rotable — no
+  el `API_KEY` único en claro de hoy.
+- **Tools nuevas (spec, no código):** `vm_control` (wrapper de `VBoxManage` con
+  allow-list de VMs del lab + audit firmado) y `ssh_guest` (SSH a Kali por una
+  interfaz de gestión, blancos aún restringidos por `authorized_targets.yaml`).
+- **Cola de misiones** con estados (encolada→corriendo→necesita-confirmación→
+  completada/fallida) y **confirmaciones remotas** para pasos gated, atadas a cada
+  paso al estilo `preview_token`/`proposal_id`.
+- **Plan por fases** (menor→mayor riesgo): 1) `vm_control` local · 2) endpoint
+  autenticado sobre Tailscale · 3) `ssh_guest` · 4) cola de misiones + confirmación
+  remota. Requisito físico: PC prendida (opción Wake-on-LAN documentada).
+
+## Defensa "kernel-grade" gratis (diseño nuevo, sin implementar)
+
+**Diseño: `lab/DEFENSA-KERNEL-GRATIS-DESIGN.md`** (2026-08-17, solo diseño, no toca
+código, no instala nada). Cómo acercar `app/malware/` a un EDR **sin driver propio
+ni certificado EV** ($0, riesgo de BSOD nulo). Tesis: **orquestar los componentes
+de kernel que Windows ya trae firmados por Microsoft** en vez de escribir código de
+kernel. Decisiones clave:
+
+- **Detección (consumir telemetría de kernel):** ETW en tiempo real (pywintrace /
+  PythonForWindows), Sysmon (ampliar `sysmon_monitor.py` de Event ID 8/10 a
+  1/3/7/11/22, config SwiftOnSecurity), AMSI para fileless, auditoría 4688+cmdline.
+  ETW le da al `behavioral_watcher` el **PID+imagen** que hoy le falta para matar al
+  proceso que cifra, no solo detectar el patrón.
+- **Bloqueo real sin driver propio (confirmado):** Defender **ASR** rules (bloqueo
+  en kernel vía `Set-MpPreference`, ej. dump de LSASS), **WDAC** (Code Integrity,
+  enforcement antes de cargar en memoria), **AppLocker** (más simple/evadible), y
+  **WFP** (filtros de red desde user-mode con `fwpuclnt`, capa ALE, sin driver).
+- **Circuito de respuesta:** evento de kernel → correlación → contención (matar
+  proceso / cortar red por WFP / cuarentena reversible / snapshot) → `store` firmado
+  Ed25519 → nota a Obsidian. Preventivo (ASR/WDAC/AppLocker/WFP pre-cargados) vs.
+  contención posterior (detectar→matar siempre deja una ventana).
+- **Plan por fases (por esfuerzo):** 1) Sysmon+config+consumo · 2) ETW tiempo real ·
+  3) AMSI · 4) enforcement (ASR→AppLocker→WDAC→WFP), **siempre audit mode antes de block**.
+- **Checklist de prioridades (por cuánto protege): `lab/DEFENSA-PRIORIDADES.md`**
+  (2026-08-17, solo documentación). Complementa al diseño con el orden priorizado
+  por protección: 0) Defender full + Tamper Protection (paso cero) · 1) AppLocker→WDAC
+  (lo que más protege, más esfuerzo) · 2) ASR · 3) AMSI · 4) Sysmon+ETW (capa sensorial)
+  · 5) WFP. Regla transversal: todo lo que bloquea va primero en **modo auditoría**.
+- **Límite honesto:** no veta creación de proceso *antes* del hecho de forma
+  arbitraria (solo por regla), canal Event Log manipulable, AMSI evadible, rootkits
+  no detectables desde el host. Recién ahí valdría un driver firmado.
+
 ## Próximos pasos sugeridos
 
 1. **Respaldo remoto**: pushear los 39 commits locales a `origin` (público). No

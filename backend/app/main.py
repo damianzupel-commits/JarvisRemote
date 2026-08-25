@@ -13,6 +13,7 @@ from .logging_config import configure_logging
 from .malware import behavioral_watcher, fullscan
 from .models import ChatRequest, ChatResponse, ToolCallLog
 from .network_info import network_candidates
+from .operation_mode import OperationMode, operating_as
 from .phone_link import handle_incoming, is_phone_connected, register_phone, unregister_phone
 from .routers.codebase import router as codebase_router
 from .routers.investigation import router as investigation_router
@@ -101,7 +102,16 @@ async def health_deep() -> dict:
 
 @app.post("/api/chat", response_model=ChatResponse, dependencies=[Depends(verify_api_key)])
 async def chat(req: ChatRequest) -> ChatResponse:
-    conv_id, reply, tool_calls = await run_agent(req.message, req.conversation_id)
+    # Este es el ÚNICO punto de entrada interactivo: hay un humano (Damian) del
+    # otro lado, sea por la ventana de escritorio, la voz de la tray o el chat
+    # del celular, todos pegan acá. Por eso declara modo SUPERVISADO (attended):
+    # el sandbox de filesystem se abre al root amplio para no perder potencia
+    # mientras Damian está mirando y puede frenar cualquier macana. Cualquier
+    # OTRO camino de ejecución (tareas programadas, CLIs de ingesta/scan,
+    # self-repair desatendido, loops de fondo) NO pasa por acá y queda AUTÓNOMO
+    # por el default fail-safe del ContextVar. Ver app/operation_mode.py.
+    with operating_as(OperationMode.SUPERVISED, source="http_chat"):
+        conv_id, reply, tool_calls = await run_agent(req.message, req.conversation_id)
     return ChatResponse(
         conversation_id=conv_id,
         reply=reply,

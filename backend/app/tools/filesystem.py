@@ -1,26 +1,76 @@
 """Tools de filesystem: listar, leer, escribir, crear y mover archivos/carpetas.
 
-Todas las rutas se resuelven relativas (o absolutas, si caen adentro) a
-`settings.fs_allowed_root`. Cualquier intento de salir de esa carpeta falla.
-Borrar está deshabilitado salvo que `FS_ALLOW_DELETE=true` en el .env.
+Todas las rutas se resuelven relativas (o absolutas, si caen adentro) a las
+raíces permitidas del sandbox. Cuáles son esas raíces DEPENDE DEL MODO DE
+OPERACIÓN (ver app/operation_mode.py):
+- SUPERVISADO (humano en vivo): raíces AMPLIAS (`FS_SUPERVISED_ROOT`, por
+  default el HOME) -- la potencia de siempre.
+- AUTÓNOMO (Jarvis solo): raíces ACOTADAS (`FS_ALLOWED_ROOT`, por default el
+  proyecto, + `FS_ALLOWED_ROOTS`) -- sandbox chico.
+Cualquier intento de salir de TODAS las raíces del modo actual falla (ver
+`_resolve`, que normaliza '..'/symlinks antes de comparar). Borrar está
+deshabilitado salvo que `FS_ALLOW_DELETE=true` en el .env.
 """
 
 from pathlib import Path
 
 from .. import audit_log
+from .. import operation_mode
 from ..codebase import store as codebase_store
 from ..codeedit import fixer
 from ..config import settings
 from . import register_tool
 
 
+def _allowed_roots() -> list[Path]:
+    """Las raíces permitidas del sandbox, ya normalizadas (symlinks y '..'
+    resueltos con .resolve()).
+
+    DEPENDE DEL MODO DE OPERACIÓN (agregado 2026-08-19, ver
+    app/operation_mode.py): en SUPERVISADO devuelve las raíces amplias
+    (fs_supervised_roots: HOME o el root que Damian configure); en AUTÓNOMO,
+    las acotadas (fs_allowed_roots: proyecto + FS_ALLOWED_ROOTS). Este es el
+    ÚNICO choke point del sandbox -- toda tool fs_* y el cwd del shell real
+    pasan por _resolve -> _allowed_roots, así que el modo se aplica en un solo
+    lugar sin duplicar la lógica de contención. operation_mode.effective_fs_roots
+    elige la lista según operation_mode.current_mode()."""
+    roots: list[Path] = []
+    for raw in operation_mode.effective_fs_roots():
+        try:
+            roots.append(Path(raw).resolve())
+        except (OSError, ValueError):
+            # Una raíz mal configurada no debe tumbar todo el sandbox; se
+            # ignora esa entrada y se sigue con las demás.
+            continue
+    return roots
+
+
 def _resolve(path: str) -> Path:
-    root = Path(settings.fs_allowed_root).resolve()
+    """Resuelve `path` a una ruta absoluta garantizando que cae dentro de
+    alguna raíz permitida. Endurecido 2026-08-19:
+    - Soporta VARIAS raíces (FS_ALLOWED_ROOT + FS_ALLOWED_ROOTS), no una sola.
+    - Normaliza con .resolve() ANTES de comparar, así '..' y symlinks quedan
+      resueltos: un intento de escaparse con '../../otra_cosa' o vía un
+      symlink que apunte afuera termina en una ruta que ya NO cae dentro de
+      ninguna raíz y se rechaza.
+    - Usa is_relative_to (contención real de prefijo de path), no comparación
+      de strings.
+    Las rutas relativas se resuelven contra la raíz PRINCIPAL (la primera);
+    las absolutas se aceptan si caen dentro de CUALQUIER raíz permitida."""
+    roots = _allowed_roots()
+    if not roots:
+        raise PermissionError(
+            "No hay ninguna raíz de filesystem permitida configurada "
+            "(FS_ALLOWED_ROOT / FS_ALLOWED_ROOTS)."
+        )
+    primary = roots[0]
     candidate = Path(path)
-    target = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
-    if target != root and root not in target.parents:
-        raise PermissionError(f"Path '{path}' está fuera de la carpeta permitida ({root})")
-    return target
+    target = candidate.resolve() if candidate.is_absolute() else (primary / candidate).resolve()
+    for root in roots:
+        if target == root or target.is_relative_to(root):
+            return target
+    allowed = ", ".join(str(r) for r in roots)
+    raise PermissionError(f"Path '{path}' está fuera de las carpetas permitidas ({allowed})")
 
 
 def _find_indexed_git_project(target: Path) -> Path | None:
