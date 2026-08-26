@@ -118,4 +118,4 @@ clamd>=1.0.2
 # transcripciones/listados/LLM mockeados; Damian tiene que validarlo una vez
 # en su PC end-to-end. Ver el docstring del módulo.
 yt-dlp>=2024.8
-youtube-transcript-api>=0.6
+youtube-transcript-api>=1.2

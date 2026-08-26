@@ -238,12 +238,22 @@ def fetch_transcript(video_id: str) -> str | None:
         NoTranscriptFound,
     )
 
+    api = YouTubeTranscriptApi()
     try:
-        fetched = YouTubeTranscriptApi().fetch(video_id, languages=_TRANSCRIPT_LANGS)
-    except (TranscriptsDisabled, NoTranscriptFound) as exc:
-        # El video realmente NO tiene subtítulos en los idiomas pedidos. NO es un
-        # error técnico: se saltea, pero se deja el motivo real en el log (no se
-        # oculta).
+        fetched = api.fetch(video_id, languages=_TRANSCRIPT_LANGS)
+    except TranscriptsDisabled as exc:
+        # Subtítulos DESHABILITADOS por el autor: no hay nada que traducir. Se
+        # saltea con gracia dejando el motivo real en el log.
+        print(f"[youtube_ingest] {video_id}: sin transcripción ({type(exc).__name__}: {exc})")
+        return None
+    except NoTranscriptFound as exc:
+        # No hay subtítulos DIRECTOS en es/en, pero puede haber una transcripción
+        # en otro idioma (p.ej. auto-generada en portugués) que YouTube marca como
+        # traducible. Antes de rendirnos, intentamos traducirla a es/en. Mejor
+        # esfuerzo: si la traducción falla por cualquier motivo, se saltea igual.
+        translated = _fetch_translated_transcript(api, video_id)
+        if translated is not None:
+            return translated
         print(f"[youtube_ingest] {video_id}: sin transcripción ({type(exc).__name__}: {exc})")
         return None
     # Nota: cualquier otra excepción se propaga a propósito (ver docstring).
@@ -251,6 +261,66 @@ def fetch_transcript(video_id: str) -> str | None:
     text = " ".join((snippet.text or "").strip() for snippet in fetched.snippets if snippet.text)
     text = text.strip()
     return text or None
+
+
+# Idiomas destino de traducción, en orden de preferencia. A diferencia de
+# _TRANSCRIPT_LANGS (que incluye variantes regionales para el match DIRECTO), acá
+# usamos los códigos base que YouTube expone como destinos de traducción.
+_TRANSLATE_TARGET_LANGS = ("es", "en")
+
+
+def _fetch_translated_transcript(api, video_id: str) -> str | None:
+    """Fallback de traducción (agregado 2026-08-26, pedido de Damian): cuando no
+    hay transcripción directa en los idiomas pedidos, busca cualquier
+    transcripción traducible del video y la traduce al primer idioma preferido
+    disponible (es -> en). Devuelve el texto plano o None si nada es traducible.
+
+    Coherente con el principio del módulo (ver docstring de `fetch_transcript`):
+    NO oculta errores técnicos. Solo `NoTranscriptFound`/`TranscriptsDisabled` al
+    LISTAR significan "no hay nada que traducir" -> devuelve None (se saltea con
+    gracia). Cualquier OTRA excepción (SSL, timeout, red, cambio de API) se
+    PROPAGA para que `ingest_playlist` la reporte como error técnico real, en vez
+    de disfrazarla de "sin transcripción". Devuelve el texto traducido o None si
+    ninguna transcripción es traducible a es/en."""
+    from youtube_transcript_api import (  # import perezoso
+        NoTranscriptFound,
+        TranscriptsDisabled,
+    )
+
+    try:
+        transcript_list = api.list(video_id)
+    except (NoTranscriptFound, TranscriptsDisabled):
+        # Realmente no hay transcripciones que listar -> nada que traducir.
+        return None
+    # Cualquier otra excepción (red/API) se propaga a propósito.
+
+    for target in _TRANSLATE_TARGET_LANGS:
+        for transcript in transcript_list:
+            if not getattr(transcript, "is_translatable", False):
+                continue
+            available = set()
+            for tl in getattr(transcript, "translation_languages", None) or []:
+                code = getattr(tl, "language_code", None)
+                if code is None and isinstance(tl, dict):
+                    code = tl.get("language_code")
+                if code:
+                    available.add(code)
+            if target not in available:
+                continue
+            # translate().fetch() puede tirar errores técnicos (SSL/timeout): se
+            # dejan PROPAGAR, no se ocultan.
+            fetched = transcript.translate(target).fetch()
+            text = " ".join(
+                (s.text or "").strip() for s in fetched.snippets if s.text
+            ).strip()
+            if text:
+                src = getattr(transcript, "language_code", "?")
+                print(
+                    f"[youtube_ingest] {video_id}: transcripción traducida a "
+                    f"'{target}' desde '{src}'"
+                )
+                return text
+    return None
 
 
 async def _call_llm(messages: list[dict]) -> str:
