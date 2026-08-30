@@ -50,6 +50,40 @@ def _is_transient_llm_error(exc: Exception) -> bool:
     return False
 
 
+def _log_llm_usage(response: Any) -> None:
+    """Loguea el uso de tokens de una respuesta del LLM (agregado 2026-08-30 para
+    diagnosticar costo y prompt-caching). Defensivo: si el provider no devuelve
+    `usage` o falta algún campo, NO rompe el turno -- logging nunca debe crashear.
+
+    `cached_tokens` = tokens del prefijo que DeepSeek/OpenRouter facturó a tarifa
+    de caché (~10x más barata). Si es 0 en pedidos repetidos, el caché no está
+    enganchando y hay que revisar la estabilidad del prefijo o recortar payload."""
+    try:
+        usage = getattr(response, "usage", None)
+        if usage is None:
+            return
+        prompt = getattr(usage, "prompt_tokens", None)
+        completion = getattr(usage, "completion_tokens", None)
+        total = getattr(usage, "total_tokens", None)
+        cached = None
+        details = getattr(usage, "prompt_tokens_details", None)
+        if details is not None:
+            cached = getattr(details, "cached_tokens", None)
+            if cached is None and isinstance(details, dict):
+                cached = details.get("cached_tokens")
+        cost = getattr(usage, "cost", None)
+        logger.info(
+            "LLM usage: prompt=%s (cacheados=%s) completion=%s total=%s costo_usd=%s",
+            prompt,
+            cached,
+            completion,
+            total,
+            cost,
+        )
+    except Exception:  # noqa: BLE001 -- el logging de uso jamás debe romper el turno
+        pass
+
+
 async def _create_chat_completion(**kwargs: Any):
     """Envuelve `client.chat.completions.create` con reintentos + backoff
     exponencial SOLO para fallas transitorias de red (ver
@@ -62,15 +96,23 @@ async def _create_chat_completion(**kwargs: Any):
     también se propaga (para que el manejo de arriba -- fallback de visión /
     re-raise -- siga funcionando igual). Cada reintento se loguea con el
     motivo, para no ocultar problemas de fondo de red."""
+    # Usage accounting de OpenRouter: para que la respuesta traiga el detalle de
+    # tokens (incluido cached_tokens y costo) hay que pedirlo explícito. Solo en
+    # OpenRouter; el Ollama local no lo necesita y no se lo mandamos.
+    if "openrouter.ai" in (settings.lmstudio_base_url or "") and "extra_body" not in kwargs:
+        kwargs["extra_body"] = {"usage": {"include": True}}
     max_attempts = max(1, settings.llm_retry_max_attempts)
     attempt = 0
     while True:
         attempt += 1
         try:
-            return await client.chat.completions.create(**kwargs)
+            response = await client.chat.completions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 -- se re-lanza salvo transitorio
             if not _is_transient_llm_error(exc) or attempt >= max_attempts:
                 raise
+        else:
+            _log_llm_usage(response)
+            return response
             delay = min(
                 settings.llm_retry_base_delay_seconds * (2 ** (attempt - 1)),
                 settings.llm_retry_max_delay_seconds,

@@ -35,6 +35,45 @@ En resumen: un tablero tipo árbol/kanban por comanda, mostrando descomposición
 
 ---
 
+## 🐞 BUG: el selector de la tray pisa la config de DeepSeek
+**Anotado: 2026-08-30**
+
+El selector de modelo de la tray-app (Lite/Medio/Hard) sobrescribe `LMSTUDIO_MODEL`
+en `.env` con uno de los `jarvis-text-*` locales, pero **no toca `LMSTUDIO_BASE_URL`**.
+Resultado: si estás en DeepSeek (base_url=OpenRouter) y tocás el selector, queda
+`base_url=OpenRouter + model=jarvis-text-v2` → **config rota** (OpenRouter no tiene
+ese modelo). Pasó el 2026-08-30. Arreglo posible: que el selector sume una opción
+"Cloud/DeepSeek" o que no pise la config manual / que setee base_url coherente con
+el tier. Mientras tanto: **si usás DeepSeek, no toques el selector de la tray.**
+Es un ítem de "mejorar el harness / pantalla de uso".
+
+---
+
+## DeepSeek: experimentos y mejoras (post cambio de cerebro)
+**Anotado: 2026-08-26**
+
+Ideas que surgieron apenas DeepSeek quedó funcionando, capturadas para no dispersarse:
+
+- **Harness engineering / mejorar el harness:** revisar el loop del agente y las tools a la luz de los videos ingeridos ("Harness Engineering", "Jerarquía: Modelos, Harness y Orquestadores"). OJO: Jarvis YA es un harness; esto es *mejorar*, no crear uno nuevo.
+- **Mejorar la "pantalla de uso"** (la interfaz/tray) — UI, no bloquea nada.
+- **Usar DeepSeek como orquestador de otras IAs/agentes** — es la orquestación de la brigada (Fase 1), el plato grande. Se cruza con [[Herdr]] y con el Restaurante Virtual. Requiere decidir el modelo de orquestación antes de construir.
+
+Todo esto es *agregar/mejorar*, no *endurecer*. Va después de la prioridad actual (primera venta) y del endurecimiento Fase 1.
+
+---
+
+## Herdr — multiplexor de terminal para orquestar agentes de código
+**Anotado: 2026-08-25**
+
+Herramienta open-source (TUI, multiplataforma) que corre varios agentes de código CLI (Claude Code, Codex, Kimi, OpenCode…) en paneles dentro de una misma terminal, con sesiones persistentes (servidor por detrás), plugins, y un skill para que un agente lea la salida de otro y se pasen tareas. Fuente: video de Fazt Code (transcripción en uploads).
+
+- **Qué NO es:** no es el "restaurante virtual" (el dashboard visual de los agentes de Raphael). Herdr son paneles de terminal, no sprites en una cocina, y no conoce Raphael ni sus tools.
+- **Dónde podría encajar (futuro):** en la *orquestación* — Claude orquesta, varios agentes trabajan y se pasan el laburo. O como entorno de desarrollo para Damian (trabajar en Raphael con varios asistentes a la vez).
+- **Por qué NO ahora:** cada agente necesita su suscripción/config aparte; es un contenedor de CLIs externos, no integrado con Raphael; adoptarlo es meter un ingrediente nuevo grande (contra "endurecer, no agregar").
+- **Depende de:** decidir el modelo de orquestación de la brigada (Fase 1) antes de elegir si Herdr es la herramienta o no.
+
+---
+
 ## Definir qué corre en Windows vs Linux (arquitectura híbrida)
 **Anotado: 2026-08-24**
 
