@@ -45,9 +45,27 @@ def _allowed_roots() -> list[Path]:
     return roots
 
 
+def _denied_roots() -> list[Path]:
+    """Carpetas PROHIBIDAS aunque caigan dentro de una raíz permitida (agregado
+    2026-08-30, `FS_DENIED_PATHS`). Lista negra explícita para proteger material
+    PERSONAL de Damian (ej. Vault-Fenix con sus análisis) que NINGUNA tool fs_*
+    debe poder leer, ni siquiera en modo supervisado con el HOME abierto. Se
+    chequea DESPUÉS de la allowlist en `_resolve`, así una carpeta denegada gana
+    aunque esté dentro de una raíz amplia. Una entrada mal configurada se ignora,
+    no tumba el sandbox."""
+    roots: list[Path] = []
+    for raw in settings.fs_denied_paths:
+        try:
+            roots.append(Path(raw).resolve())
+        except (OSError, ValueError):
+            continue
+    return roots
+
+
 def _resolve(path: str) -> Path:
     """Resuelve `path` a una ruta absoluta garantizando que cae dentro de
-    alguna raíz permitida. Endurecido 2026-08-19:
+    alguna raíz permitida Y que NO cae dentro de ninguna carpeta denegada
+    (`FS_DENIED_PATHS`). Endurecido 2026-08-19:
     - Soporta VARIAS raíces (FS_ALLOWED_ROOT + FS_ALLOWED_ROOTS), no una sola.
     - Normaliza con .resolve() ANTES de comparar, así '..' y symlinks quedan
       resueltos: un intento de escaparse con '../../otra_cosa' o vía un
@@ -66,6 +84,15 @@ def _resolve(path: str) -> Path:
     primary = roots[0]
     candidate = Path(path)
     target = candidate.resolve() if candidate.is_absolute() else (primary / candidate).resolve()
+    # Lista negra PRIMERO: una carpeta denegada (FS_DENIED_PATHS) gana aunque el
+    # path caiga dentro de una raíz permitida -- protege material personal aun con
+    # el HOME entero abierto en modo supervisado.
+    for denied in _denied_roots():
+        if target == denied or target.is_relative_to(denied):
+            raise PermissionError(
+                f"Path '{path}' está en una carpeta PERSONAL bloqueada (FS_DENIED_PATHS). "
+                "Raphael no accede al material personal de Damian."
+            )
     for root in roots:
         if target == root or target.is_relative_to(root):
             return target

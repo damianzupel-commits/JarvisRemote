@@ -4,10 +4,54 @@
 > convenciones, gates de seguridad) ver `CLAUDE.md`. **Actualizá este archivo al
 > cerrar cada sesión** (ver protocolo al final).
 
-**Última actualización:** 2026-08-17
-**Último commit:** `33fe302 docs: actualiza READMEs con los modulos nuevos (malware, selfrepair, testing)`
-**Rama:** `master` — 39 commits locales por delante de `origin/master` (sin pushear).
-**Working tree:** limpio.
+**Última actualización:** 2026-08-30
+**Último commit:** `e83c99b feat: instrumentacion de tokens/costo en el harness + ingesta de videos nuevos al vault + update de comandas y tabla`
+**Rama:** `master` — **al día con `origin/master`** (pusheado; respaldo remoto OK).
+**Working tree:** puede haber cambios de la sesión en curso — commitear al cerrar.
+
+---
+
+## Sesión 2026-08-30 — lo más reciente (leé esto primero)
+
+**Cerebro cambiado a DeepSeek V4 Pro** vía OpenRouter (pay-as-you-go). En `backend/.env`:
+`LMSTUDIO_BASE_URL=https://openrouter.ai/api/v1`, `LMSTUDIO_MODEL=deepseek/deepseek-v4-pro-0813`,
+`LLM_API_KEY=<key de OpenRouter>`. Backup de la config local (Ollama / `jarvis-text-v2`) en
+`backend/.env.bak-openrouter`. ⚠️ **El selector de modelo de la tray-app PISA esta config**
+(la vuelve a `jarvis-text-v2`) — si usás DeepSeek, no toques el selector (bug anotado en `TABLA.md`).
+
+**Costo bajo control:** el prompt pesa ~30k tokens (system prompt + 103 tools por llamada),
+pero DeepSeek cachea automático (~99% cache-hit una vez caliente) → ~US$0.0008 por pedido simple.
+Se agregó instrumentación de tokens/costo por llamada en `agent.py` (`_log_llm_usage` → `general.log`).
+Optimización opcional pendiente: mandar menos de 103 tools por llamada.
+
+**Sistema de cocina (cómo se organiza el trabajo):** `COMANDAS.md` (riel de tareas; 4 pasos:
+entra comanda → tabla → fuego → emplatado; **UNA en el fuego a la vez**), `TABLA.md` (ideas crudas
+sin confirmar), `recetario/` (servicios/procedimientos; ⭐ receta 01 = Blindaje PyME), `PROVEEDORES.md`,
+`docs/LA-BRIGADA.md`, `docs/raphael/` (documentación completa del proyecto).
+
+**Prioridad ACTUAL: primera venta (Blindaje PyME).** El servicio que se vende AHORA es la versión
+**LITE** (backups + Defender full/Tamper Protection + SmartScreen + updates de Windows +
+contraseñas/wifi), entregable en un día — **NO** la receta 01 "gourmet" (kernel-grade, semanas).
+Herramienta de venta: `Escritorio/Blindaje-PyME-Checklist-15min.md` (chequeo con permiso → informe → precio).
+
+**Ingesta YouTube:** 49/52 videos de la playlist "Info para Jarvis" ingeridos al vault con
+discernimiento de relevancia; fix de traducción (pt→es/en) agregado; faltan ~3 por bloqueo temporal
+de IP de YouTube (re-run cuando levante).
+
+---
+
+## Índice — dónde vive cada cosa
+
+- **Qué es el proyecto / arquitectura / modelos / gates de seguridad:** `CLAUDE.md`
+- **Estado y prioridades:** este archivo (`ESTADO.md`)
+- **Riel de tareas (qué hacer y en qué orden):** `COMANDAS.md` · **Ideas crudas:** `TABLA.md`
+- **Servicios y procedimientos vendibles:** `recetario/` · **Proveedores/ingredientes:** `PROVEEDORES.md`
+- **Brigada de agentes:** `docs/LA-BRIGADA.md` · **Docs completas del proyecto:** `docs/raphael/`
+- **Base de conocimiento (notas de video, seguridad, negocio):** `backend/obsidian_vault/jarvis/`
+- **Diseños de laboratorio y defensa:** `lab/` (cyber range, defensa kernel-grade, orquestación remota)
+- **Config y secretos:** `backend/.env` (**NO se commitea** — el repo es PÚBLICO)
+- ⚠️ **Material PERSONAL de Damian (proyecto Fénix, análisis psicológicos) vive en un vault APARTE,
+  `C:\Users\dam\Vault-Fenix` — NO es parte de este proyecto, NO va al repo público ni al contexto de Raphael.**
 
 ---
 
@@ -41,9 +85,9 @@ que quedaron integradas y commiteadas:
 - **Cliente cloud** (Google AI / Gemini Flash) + tools `cloud_expert_*` y
   `opencode_run_task`.
 - **~70 notas nuevas en el vault** de conocimiento (`backend/obsidian_vault/jarvis/`).
-- **Cambio de modelo de chat a `gpt-oss:120b-cloud`** (Ollama cloud) en
-  `backend/.env` — antes corría local en `jarvis-text-v2` (Qwen3-30B-A3B). Ver
-  la sección de modelos en `CLAUDE.md`.
+- **Modelo de chat:** histórico → local `jarvis-text-v2` (Qwen3-30B) → `gpt-oss:120b-cloud`
+  (Ollama cloud, pegaba límite semanal) → **HOY: `deepseek/deepseek-v4-pro-0813` vía OpenRouter**
+  (ver la sección "Sesión 2026-08-30" arriba y la sección de modelos en `CLAUDE.md`).
 
 ## Lo más reciente y todavía sin cerrar
 
@@ -195,9 +239,8 @@ kernel. Decisiones clave:
 - **Remoto:** `origin` = `https://github.com/damianzupel-commits/JarvisRemote.git`
 - **Accesible:** sí (verificado con `git ls-remote`).
 - **Visibilidad:** **PÚBLICO** (confirmado en GitHub el 2026-08-17).
-- **Sin pushear:** los 39 commits locales (incluido el commit de docs de hoy)
-  siguen solo en local, a la espera del OK de Damian para pushear a un repo
-  público. `origin/master` está en `cfb6d09` (el remoto muestra 42 commits).
+- **Pusheado:** `master` está **al día con `origin/master`** (últimos respaldos:
+  2026-08-30, commits `f1017f2` → `e83c99b`). El respaldo remoto ya no es un pendiente.
 
 ---
 

@@ -126,6 +126,15 @@ class Settings:
     fs_allowed_roots_extra: list[str] = _split_paths(os.getenv("FS_ALLOWED_ROOTS"))
     fs_allow_delete: bool = _bool(os.getenv("FS_ALLOW_DELETE"), False)
 
+    # LISTA NEGRA de carpetas (agregado 2026-08-30): rutas PROHIBIDAS aunque caigan
+    # dentro de una raíz permitida -- incluso en modo SUPERVISADO con el HOME entero
+    # abierto. Se chequea DESPUÉS de la allowlist en filesystem._resolve, así una
+    # carpeta denegada gana SIEMPRE. Pensado para proteger material PERSONAL de Damian
+    # (ej. Vault-Fenix con sus análisis psicológicos) que ninguna tool fs_* debe poder
+    # leer, sin tener que achicar el sandbox entero. Configurable con FS_DENIED_PATHS
+    # en el .env (separado por comas).
+    fs_denied_paths: list[str] = _split_paths(os.getenv("FS_DENIED_PATHS"))
+
     # Raíz AMPLIA del modo SUPERVISADO (attended), agregado 2026-08-19 junto con
     # app/operation_mode.py. Cuando hay un humano usando Jarvis en vivo, el
     # sandbox se abre a esta raíz -- por default el HOME entero, que es la
