@@ -449,9 +449,11 @@ def _tools_for_profile(profile_name: str, all_tools: list[dict]) -> list[dict]:
 
 def _phone_status_note() -> dict:
     connected = is_phone_connected()
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
         "role": "system",
         "content": (
+            "[Fecha y hora actual, hora local de la PC: " + ahora + "] "
             "[Estado actual, verificado ahora mismo] Celular conectado: "
             + ("SÍ" if connected else "NO")
             + (
