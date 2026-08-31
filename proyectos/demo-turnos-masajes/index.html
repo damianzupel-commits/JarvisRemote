@@ -2,27 +2,549 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Estudio Serenidad · Turnos</title>
 <style>
-:root{--fondo:#f4f1ec;--sup:#fff;--texto:#3a3a3a;--suave:#7a7a7a;--acento:#7f9bb3;--acento2:#58708a;--verde:#25d366;--wa:#e7f7ee;--borde:#e3ddd3;--sombra:0 2px 10px rgba(60,50,40,.08);--r:14px}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-html,body{margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--fondo);color:var(--texto);line-height:1.45;min-height:100vh;display:flex;flex-direction:column}
-header{background:linear-gradient(135deg,var(--acento),var(--acento2));color:#fff;padding:22px 18px 18px;text-align:center}
-header h1{margin:0;font-size:1.35rem;font-weight:650}
-header p{margin:6px 0 0;font-size:.85rem;opacity:.9}
-nav{display:flex;background:#fff;border-bottom:1px solid var(--borde);position:sticky;top:0;z-index:5}
-nav button{flex:1;border:none;background:none;padding:14px 6px;font-size:.95rem;font-weight:600;color:var(--suave);cursor:pointer;border-bottom:3px solid transparent;font-family:inherit}
-nav button.active{color:var(--acento2);border-bottom-color:var(--acento)}
-main{flex:1;padding:18px 14px 120px;max-width:640px;width:100%;margin:0 auto}
-section.panel{display:none}
-section.panel.active{display:block;animation:ap .18s ease}
-@keyframes ap{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-.card{background:var(--sup);border-radius:var(--r);padding:16px;box-shadow:var(--sombra);border:1px solid var(--borde);margin-bottom:14px}
-h2{font-size:1.05rem;margin:0 0 4px;color:var(--acento2)}
-.sub{font-size:.82rem;color:var(--suave);margin:0 0 6px}
-label{display:block;font-size:.82rem;font-weight:600;color:var(--suave);margin:14px 0 6px}
-.card label:first-of-type{margin-top:0}
+  :root {
+    --bg: #f7f3ee;
+    --card: #ffffff;
+    --accent: #b48c6f;
+    --accent-soft: #e9dccf;
+    --text: #423a33;
+    --text-muted: #8c7f72;
+    --green: #d3d9c7;
+    --green-dark: #1f6b3a;
+    --wa-bubble: #dcf8c6;
+    --wa-bubble-text: #25331f;
+    --danger: #b35555;
+    --border: #e7ded3;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+    min-height: 100vh;
+    padding-bottom: 24px;
+  }
+
+  header {
+    background: linear-gradient(135deg, #c7a98d, #b48c6f);
+    color: #fff;
+    padding: 22px 20px 16px;
+    text-align: center;
+  }
+  header h1 { font-size: 1.4rem; font-weight: 600; letter-spacing: .3px; }
+  header p { font-size: .85rem; opacity: .9; margin-top: 4px; }
+
+  nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+  }
+  nav button {
+    flex: 1;
+    border: none;
+    background: none;
+    padding: 13px 4px;
+    font-size: .85rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+  }
+  nav button.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
+
+  main { padding: 16px 14px; max-width: 640px; margin: 0 auto; }
+
+  section { display: none; }
+  section.active { display: block; }
+
+  h2 { font-size: 1.05rem; margin: 4px 2px 12px; color: var(--text); }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 14px;
+    box-shadow: 0 1px 3px rgba(66,58,51,.05);
+  }
+
+  label {
+    display: block;
+    font-size: .8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    margin: 12px 0 5px;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+  }
+  label:first-of-type { margin-top: 0; }
+
+  input, select {
+    width: 100%;
+    padding: 11px 12px;
+    font-size: 1rem;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #fbfaf8;
+    color: var(--text);
+    font-family: inherit;
+  }
+  input:focus, select:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: #fff;
+  }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    border: 1px solid var(--border);
+    background: #fbfaf8;
+    border-radius: 999px;
+    padding: 9px 14px;
+    font-size: .9rem;
+    cursor: pointer;
+    color: var(--text);
+    user-select: none;
+    transition: all .12s ease;
+  }
+  .chip.selected {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 600;
+  }
+
+  .btn {
+    width: 100%;
+    margin-top: 18px;
+    padding: 14px;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: .3px;
+  }
+  .btn:active { background: #a37d5f; }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    transform: translateX(-50%) translateY(20px);
+    background: var(--green-dark);
+    color: #fff;
+    padding: 12px 18px;
+    border-radius: 10px;
+    font-size: .9rem;
+    opacity: 0;
+    pointer-events: none;
+    transition: all .25s ease;
+    max-width: 90vw;
+    text-align: center;
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .turno { display: flex; flex-direction: column; gap: 8px; }
+  .turno-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .turno-fecha { font-weight: 600; font-size: .95rem; }
+  .turno-hora { color: var(--text-muted); font-size: .85rem; }
+  .tag {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: #7a5c44;
+    font-size: .72rem;
+    font-weight: 700;
+    padding: 3px 9px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+  }
+  .turno-cliente { font-size: .95rem; }
+  .turno-cliente small { color: var(--text-muted); }
+
+  .btn-wa {
+    align-self: flex-start;
+    margin-top: 4px;
+    background: #e9f3ea;
+    color: var(--green-dark);
+    border: 1px solid var(--green);
+    padding: 8px 13px;
+    border-radius: 10px;
+    font-size: .82rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-wa:active { background: #dbeadc; }
+
+  /* Preview estilo burbuja de WhatsApp */
+  .wa-preview {
+    margin-top: 12px;
+    background: #ece5dd;
+    border-radius: 10px;
+    padding: 12px;
+    display: none;
+  }
+  .wa-preview.show { display: block; }
+  .wa-bubble {
+    background: var(--wa-bubble);
+    color: var(--wa-bubble-text);
+    border-radius: 8px;
+    border-top-left-radius: 2px;
+    padding: 10px 12px;
+    font-size: .92rem;
+    box-shadow: 0 1px 1px rgba(0,0,0,.1);
+    position: relative;
+    max-width: 92%;
+  }
+  .wa-bubble .wa-time {
+    display: block;
+    text-align: right;
+    font-size: .68rem;
+    color: #7f8f72;
+    margin-top: 4px;
+  }
+
+  .cliente { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .cliente-nombre { font-weight: 600; }
+  .cliente-tel { color: var(--text-muted); font-size: .85rem; }
+  .cliente-count {
+    background: var(--accent-soft);
+    color: #7a5c44;
+    min-width: 28px;
+    height: 28px;
+    border-radius: 999px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .8rem; font-weight: 700;
+    padding: 0 8px;
+  }
+
+  .empty { text-align: center; color: var(--text-muted); padding: 26px 10px; font-size: .92rem; }
 </style>
 </head>
+<body>
+  <header>
+    <h1>Estudio Serenidad</h1>
+    <p>Masajes para el cuerpo y la mente</p>
+  </header>
+
+  <nav>
+    <button data-tab="reservar" class="active">Reservar</button>
+    <button data-tab="turnos">Turnos</button>
+    <button data-tab="clientes">Clientes</button>
+  </nav>
+
+  <main>
+    <!-- RESERVAR -->
+    <section id="tab-reservar" class="active">
+      <h2>Reservá tu turno</h2>
+      <div class="card">
+        <label>Servicio</label>
+        <div class="chips" id="servicios"></div>
+
+        <label>Día</label>
+        <input type="date" id="fecha">
+
+        <label>Hora</label>
+        <input type="time" id="hora">
+
+        <label>Nombre</label>
+        <input type="text" id="nombre" placeholder="Tu nombre" autocomplete="name">
+
+        <label>Teléfono</label>
+        <input type="tel" id="telefono" placeholder="Sin espacios, ej. 1122334455" autocomplete="tel">
+
+        <button class="btn" id="btn-reservar">Reservar turno</button>
+      </div>
+    </section>
+
+    <!-- TURNOS -->
+    <section id="tab-turnos">
+      <h2>Turnos agendados</h2>
+      <div id="lista-turnos"></div>
+    </section>
+
+    <!-- CLIENTES -->
+    <section id="tab-clientes">
+      <h2>Clientes</h2>
+      <div id="lista-clientes"></div>
+    </section>
+  </main>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  var STORAGE_KEY = 'estudio_serenidad_turnos';
+  var SERVICIOS = ['Relajante', 'Descontracturante', 'Piedras calientes'];
+
+  var state = { turnos: [] };
+
+  // ---------- utilidades de fecha ----------
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+  function isoLocal(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  function addDays(base, n) {
+    var d = new Date(base);
+    d.setDate(d.getDate() + n);
+    return d;
+  }
+
+  var MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  var DIAS = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+
+  function parseFecha(iso) {
+    var p = iso.split('-');
+    return new Date(+p[0], +p[1] - 1, +p[2]);
+  }
+
+  function formatearFecha(iso) {
+    var d = parseFecha(iso);
+    return DIAS[d.getDay()] + ' ' + d.getDate() + ' de ' + MESES[d.getMonth()];
+  }
+
+  function formatearHora(hhmm) {
+    if (!hhmm) return '';
+    var p = hhmm.split(':');
+    return p[0] + ':' + p[1] + ' hs';
+  }
+
+  function sortKey(t) { return (t.fecha || '') + ' ' + (t.hora || ''); }
+
+  // ---------- datos ----------
+  function cargar() {
+    var raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      try { state.turnos = JSON.parse(raw) || []; return; }
+      catch (e) { state.turnos = []; }
+    }
+    precargar();
+    guardar();
+  }
+
+  function precargar() {
+    var hoy = new Date();
+    var base = [
+      { servicio: 'Relajante',          dia: 1, hora: '10:00', nombre: 'Valentina Ríos',  telefono: '1155667788' },
+      { servicio: 'Descontracturante',  dia: 1, hora: '15:30', nombre: 'Joaquín Méndez',   telefono: '1166778899' },
+      { servicio: 'Piedras calientes',  dia: 2, hora: '11:00', nombre: 'Camila Torres',    telefono: '1144556677' },
+      { servicio: 'Relajante',          dia: 3, hora: '18:00', nombre: 'Valentina Ríos',   telefono: '1155667788' }
+    ];
+    base.forEach(function (b, i) {
+      state.turnos.push({
+        id: 'pre-' + i,
+        servicio: b.servicio,
+        fecha: isoLocal(addDays(hoy, b.dia)),
+        hora: b.hora,
+        nombre: b.nombre,
+        telefono: b.telefono
+      });
+    });
+  }
+
+  function guardar() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.turnos));
+  }
+
+  // ---------- interfaz ----------
+  function renderServicios() {
+    var wrap = document.getElementById('servicios');
+    wrap.innerHTML = '';
+    SERVICIOS.forEach(function (s, i) {
+      var el = document.createElement('div');
+      el.className = 'chip' + (i === 0 ? ' selected' : '');
+      el.textContent = s;
+      el.dataset.servicio = s;
+      el.addEventListener('click', function () {
+        wrap.querySelectorAll('.chip').forEach(function (c) { c.classList.remove('selected'); });
+        el.classList.add('selected');
+      });
+      wrap.appendChild(el);
+    });
+  }
+
+  function renderTurnos() {
+    var cont = document.getElementById('lista-turnos');
+    if (!state.turnos.length) {
+      cont.innerHTML = '<div class="empty">Todavía no hay turnos agendados.</div>';
+      return;
+    }
+    var ordenados = state.turnos.slice().sort(function (a, b) {
+      return sortKey(a).localeCompare(sortKey(b));
+    });
+
+    var html = '';
+    ordenados.forEach(function (t) {
+      html += '' +
+        '<div class="card turno">' +
+          '<div class="turno-top">' +
+            '<span class="turno-fecha">' + formatearFecha(t.fecha) + '</span>' +
+            '<span class="turno-hora">' + formatearHora(t.hora) + '</span>' +
+          '</div>' +
+          '<span class="tag">' + t.servicio + '</span>' +
+          '<div class="turno-cliente">' + t.nombre +
+            (t.telefono ? ' <small>· ' + t.telefono + '</small>' : '') +
+          '</div>' +
+          '<button class="btn-wa" data-id="' + t.id + '">Ver recordatorio WhatsApp</button>' +
+          '<div class="wa-preview" id="wa-' + t.id + '">' +
+            '<div class="wa-bubble">' +
+              'Hola <b>' + t.nombre + '</b>, te recordamos tu turno de <b>' + t.servicio +
+              '</b> el <b>' + formatearFecha(t.fecha) + '</b> a las <b>' + formatearHora(t.hora) +
+              '</b> en Estudio Serenidad. Si no podés, avisanos. ¡Te esperamos!' +
+              '<span class="wa-time">' + hoyRelativo(t.hora) + '</span>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+    });
+    cont.innerHTML = html;
+
+    cont.querySelectorAll('.btn-wa').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var p = document.getElementById('wa-' + btn.dataset.id);
+        if (!p) return;
+        var mostrar = !p.classList.contains('show');
+        // cierra todos, abre el seleccionado
+        cont.querySelectorAll('.wa-preview').forEach(function (x) { x.classList.remove('show'); });
+        if (mostrar) p.classList.add('show');
+        btn.textContent = mostrar ? 'Ocultar recordatorio' : 'Ver recordatorio WhatsApp';
+      });
+    });
+  }
+
+  function hoyRelativo(hhmm) {
+    // hora actual simulada para el preview (formato WhatsApp 12h)
+    var d = new Date();
+    var h = d.getHours();
+    var am = h < 12;
+    var h12 = h % 12 === 0 ? 12 : h % 12;
+    return h12 + ':' + pad(d.getMinutes()) + (am ? ' a.m.' : ' p.m.');
+  }
+
+  function renderClientes() {
+    var cont = document.getElementById('lista-clientes');
+    var map = {};
+    state.turnos.forEach(function (t) {
+      var key = (t.telefono && t.telefono.trim()) || ('__' + t.nombre);
+      if (!map[key]) map[key] = { nombre: t.nombre, telefono: t.telefono || '', count: 0 };
+      map[key].count++;
+    });
+    var keys = Object.keys(map);
+    if (!keys.length) {
+      cont.innerHTML = '<div class="empty">Todavía no hay clientes cargados.</div>';
+      return;
+    }
+    // ordena por cantidad de turnos desc, luego nombre
+    keys.sort(function (a, b) {
+      if (map[b].count !== map[a].count) return map[b].count - map[a].count;
+      return map[a].nombre.localeCompare(map[b].nombre);
+    });
+    var html = '';
+    keys.forEach(function (k) {
+      var c = map[k];
+      html += '' +
+        '<div class="card cliente">' +
+          '<div>' +
+            '<div class="cliente-nombre">' + c.nombre + '</div>' +
+            (c.telefono ? '<div class="cliente-tel">' + c.telefono + '</div>' : '') +
+          '</div>' +
+          '<div class="cliente-count" title="turnos">' + c.count + '</div>' +
+        '</div>';
+    });
+    cont.innerHTML = html;
+  }
+
+  function mostrarToast(msg) {
+    var t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(mostrarToast._t);
+    mostrarToast._t = setTimeout(function () { t.classList.remove('show'); }, 2600);
+  }
+
+  // ---------- acciones ----------
+  function reservar() {
+    var servicioEl = document.querySelector('#servicios .chip.selected');
+    var servicio = servicioEl ? servicioEl.dataset.servicio : null;
+    var fecha = document.getElementById('fecha').value;
+    var hora = document.getElementById('hora').value;
+    var nombre = document.getElementById('nombre').value.trim();
+    var telefono = document.getElementById('telefono').value.trim();
+
+    if (!servicio) { mostrarToast('Elegí un servicio'); return; }
+    if (!fecha) { mostrarToast('Elegí un día'); return; }
+    if (!hora) { mostrarToast('Elegí una hora'); return; }
+    if (!nombre) { mostrarToast('Escribí tu nombre'); return; }
+    if (!telefono) { mostrarToast('Escribí tu teléfono'); return; }
+
+    var turno = {
+      id: 't-' + Date.now(),
+      servicio: servicio,
+      fecha: fecha,
+      hora: hora,
+      nombre: nombre,
+      telefono: telefono
+    };
+    state.turnos.push(turno);
+    guardar();
+
+    document.getElementById('nombre').value = '';
+    document.getElementById('telefono').value = '';
+
+    mostrarToast('Turno reservado: ' + servicio + ' · ' + formatearFecha(fecha) + ' ' + formatearHora(hora));
+    renderTurnos();
+    renderClientes();
+  }
+
+  // ---------- pestañas ----------
+  function cambiarTab(tab) {
+    document.querySelectorAll('nav button').forEach(function (b) {
+      b.classList.toggle('active', b.dataset.tab === tab);
+    });
+    document.querySelectorAll('main section').forEach(function (s) {
+      s.classList.toggle('active', s.id === 'tab-' + tab);
+    });
+  }
+
+  // ---------- init ----------
+  function init() {
+    cargar();
+    renderServicios();
+
+    // fecha por defecto: mañana
+    document.getElementById('fecha').value = isoLocal(addDays(new Date(), 1));
+
+    document.getElementById('btn-reservar').addEventListener('click', reservar);
+
+    document.querySelectorAll('nav button').forEach(function (b) {
+      b.addEventListener('click', function () { cambiarTab(b.dataset.tab); });
+    });
+
+    renderTurnos();
+    renderClientes();
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
+})();
+</script>
+</body>
+</html>
