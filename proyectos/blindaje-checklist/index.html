@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Blindaje Checklist - Seguridad del negocio</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #1b1f27;
+    --card-edge: #2a2f3a;
+    --text: #e8eaf0;
+    --muted: #9aa3b2;
+    --bien: #2ecc71;
+    --flojo: #f1c40f;
+    --grave: #e74c3c;
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  .wrap {
+    max-width: 640px;
+    margin: 0 auto;
+    padding: 16px 14px 140px;
+  }
+
+  header {
+    padding: 12px 2px 6px;
+    border-bottom: 1px solid var(--card-edge);
+    margin-bottom: 16px;
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    letter-spacing: .2px;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: .9rem;
+    margin-top: 6px;
+  }
+
+  /* Score panel (fixed at top of list) */
+  .score {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+
+  .score-box {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 12px;
+    padding: 12px 10px;
+    text-align: center;
+  }
+
+  .score-box .number {
+    font-size: 2rem;
+    font-weight: 800;
+    line-height: 1;
+  }
+
+  .score-box .label {
+    font-size: .75rem;
+    color: var(--muted);
+    margin-top: 5px;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+  }
+
+  .score-box.bien .number { color: var(--bien); }
+  .score-box.grave .number { color: var(--grave); }
+
+  /* Item cards */
+  .item {
+    background: var(--card);
+    border: 1px solid var(--card-edge);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+  }
+
+  .item .num {
+    display: inline-block;
+    min-width: 26px;
+    text-align: center;
+    font-size: .8rem;
+    font-weight: 700;
+    color: var(--muted);
+    border: 1px solid var(--card-edge);
+    border-radius: 8px;
+    padding: 2px 6px;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  .item .title {
+    font-size: 1.05rem;
+    font-weight: 600;
+    vertical-align: middle;
+    line-height: 1.3;
+  }
+
+  .buttons {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .btn {
+    flex: 1;
+    min-height: 52px;
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+    background: #242a35;
+    border: 2px solid transparent;
+    border-radius: 10px;
+    padding: 8px 4px;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, transform .05s;
+    user-select: none;
+  }
+
+  .btn:active { transform: scale(.97); }
+
+  .btn[data-value="bien"].sel {
+    background: rgba(46, 204, 113, .18);
+    border-color: var(--bien);
+    color: #d9ffe8;
+  }
+
+  .btn[data-value="flojo"].sel {
+    background: rgba(241, 196, 15, .15);
+    border-color: var(--flojo);
+    color: #fff3c4;
+  }
+
+  .btn[data-value="grave"].sel {
+    background: rgba(231, 76, 60, .18);
+    border-color: var(--grave);
+    color: #ffd9d4;
+  }
+
+  /* Bottom summary bar */
+  .summary {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(15, 17, 21, .96);
+    border-top: 1px solid var(--card-edge);
+    padding: 12px 14px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .summary .line {
+    font-size: .95rem;
+  }
+
+  .summary .line strong { color: var(--bien); }
+  .summary .line .red { color: var(--grave); }
+
+  .reset {
+    background: transparent;
+    border: 1px solid var(--card-edge);
+    color: var(--muted);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: .9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .reset:active { background: #242a35; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Blindaje Checklist</h1>
+    <div class="subtitle">Revisá la seguridad de la PC del negocio · 10 puntos</div>
+  </header>
+
+  <div class="score">
+    <div class="score-box bien">
+      <div class="number" id="scoreBien">0</div>
+      <div class="label">Bien / 10</div>
+    </div>
+    <div class="score-box grave">
+      <div class="number" id="scoreGrave">0</div>
+      <div class="label">Graves</div>
+    </div>
+  </div>
+
+  <div id="list"></div>
+</div>
+
+<div class="summary">
+  <div class="line" id="summaryText">Sin responder</div>
+  <button class="reset" id="btnReset">Reiniciar</button>
+</div>
+
+<script>
+(function () {
+  const ITEMS = [
+    "Copias de seguridad (backups)",
+    "Antivirus / Windows Defender activo",
+    "Windows actualizado (no viejo)",
+    "Datos de clientes con respaldo",
+    "Contraseñas decentes (no en papel ni compartidas)",
+    "Router / WiFi (clave cambiada, WiFi de clientes separada)",
+    "PC de la caja no se usa para navegar",
+    "Cámaras / DVR sin clave de fábrica",
+    "Buenos hábitos (no pendrives ajenos, no mails raros)",
+    "PC no queda desbloqueada a la vista"
+  ];
+
+  const STORAGE_KEY = "blindaje-checklist-v1";
+  const state = new Array(ITEMS.length).fill(null); // "bien" | "flojo" | "grave" | null
+
+  const listEl = document.getElementById("list");
+  const scoreBienEl = document.getElementById("scoreBien");
+  const scoreGraveEl = document.getElementById("scoreGrave");
+  const summaryEl = document.getElementById("summaryText");
+
+  // Load persisted state (if any)
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    if (Array.isArray(saved)) {
+      for (let i = 0; i < ITEMS.length; i++) {
+        if (["bien", "flojo", "grave"].includes(saved[i])) state[i] = saved[i];
+      }
+    }
+  } catch (e) { /* ignore corrupted storage */ }
+
+  function persist() {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+  }
+
+  function render() {
+    const bien = state.filter(v => v === "bien").length;
+    const grave = state.filter(v => v === "grave").length;
+    const responded = state.filter(v => v !== null).length;
+
+    scoreBienEl.textContent = bien;
+    scoreGraveEl.textContent = grave;
+
+    if (responded === 0) {
+      summaryEl.innerHTML = "Sin responder";
+    } else {
+      summaryEl.innerHTML =
+        "<strong>" + bien + "</strong> de 10 Bien · <span class=\"red\">" + grave + "</span> Grave" +
+        (responded < ITEMS.length ? " · " + (ITEMS.length - responded) + " sin marcar" : "");
+    }
+  }
+
+  function buildList() {
+    ITEMS.forEach(function (title, i) {
+      const item = document.createElement("div");
+      item.className = "item";
+
+      const head = document.createElement("div");
+      head.innerHTML = '<span class="num">' + (i + 1) + '</span><span class="title"></span>';
+      head.querySelector(".title").textContent = title;
+      item.appendChild(head);
+
+      const row = document.createElement("div");
+      row.className = "buttons";
+
+      ["bien", "flojo", "grave"].forEach(function (value) {
+        const btn = document.createElement("button");
+        btn.className = "btn";
+        btn.type = "button";
+        btn.dataset.index = i;
+        btn.dataset.value = value;
+        btn.textContent = value === "bien" ? "Bien" : (value === "flojo" ? "Flojo" : "Grave");
+        row.appendChild(btn);
+      });
+
+      item.appendChild(row);
+      listEl.appendChild(item);
+    });
+  }
+
+  function updateButtons() {
+    document.querySelectorAll(".btn").forEach(function (btn) {
+      const idx = Number(btn.dataset.index);
+      const value = btn.dataset.value;
+      btn.classList.toggle("sel", state[idx] === value);
+    });
+  }
+
+  listEl.addEventListener("click", function (e) {
+    const btn = e.target.closest(".btn");
+    if (!btn) return;
+    const idx = Number(btn.dataset.index);
+    const value = btn.dataset.value;
+
+    // Toggle: tapping the selected option again clears it
+    state[idx] = state[idx] === value ? null : value;
+    persist();
+    updateButtons();
+    render();
+  });
+
+  document.getElementById("btnReset").addEventListener("click", function () {
+    for (let i = 0; i < state.length; i++) state[i] = null;
+    persist();
+    updateButtons();
+    render();
+  });
+
+  buildList();
+  updateButtons();
+  render();
+})();
+</script>
+</body>
+</html>
