@@ -35,6 +35,25 @@ En resumen: un tablero tipo árbol/kanban por comanda, mostrando descomposición
 
 ---
 
+## Hub de orquestación único (celu + PC) — Raphael + IAs gratis
+**Anotado: 2026-08-30**
+
+Idea: un **solo lugar** (interfaz única en celu y PC) desde donde usar Raphael + varios
+modelos **gratis** (OpenRouter free / local), con un orquestador que rutee entre ellos
+según la tarea. Se cruza con [[Restaurante Virtual]], [[Herdr]] y la brigada de agentes.
+
+**Verdad estructural (importante, no olvidar):** "Claude Dispatch" **NO se puede meter
+como nodo programático** del orquestador — es un sistema hosted de Anthropic (esta interfaz),
+sin API para enchufarlo dentro del backend de Raphael. "Claude en el loop" = sesiones de
+planificación/arquitectura/builds difíciles con Claude, NO un agente dentro del sistema.
+Lo que SÍ se construye: interfaz única sobre **Raphael + modelos gratis**, con Raphael/DeepSeek
+(u otro) como orquestador que rutea.
+
+**Por qué NO ahora:** es un build de varias sesiones (Fase 1 de orquestación), no un apuro.
+Requiere diseño dedicado. Cimiento ya puesto (2026-08-30): acceso remoto celu↔PC por Tailscale.
+
+---
+
 ## 🐞 BUG: el selector de la tray pisa la config de DeepSeek
 **Anotado: 2026-08-30**
 

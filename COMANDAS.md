@@ -46,6 +46,7 @@ El tablero de trabajo de Damian, con la metáfora de cocina.
   LLM_API_KEY, web_forms/DPAPI, ingesta). *Código/Testing.*
 - **Activar la auto-ingesta de la playlist** (schtasks). *Scheduler.*
 - **Ordenar la PC / mise en place** (estaciones 0-Tabla…3-Gourmet). *Sistema.*
+- **Robustez de arranque backend/tray** (bug real, 2026-08-30): reiniciar la tray-app pelea por el puerto 8000 con el backend ya corriendo (error 10048). Fix: que la tray **detecte un backend existente y se conecte** en vez de lanzar otro → un solo backend, y abrir/cerrar cualquier cliente (celu, tray, PowerShell) "just works". *Estación: Sistema/tray-app (`process_manager.py`).*
 - **Endurecimiento Fase 1** ⬅️ *al frente de la cola.* Tests adversariales
   (escape de sandbox + prompt injection) y **cyber range / VM lab**
   (Raphael-vs-Raphael, receta 04). ⚠️ Requiere jaula herméticamente aislada
